@@ -1,0 +1,176 @@
+R 4.1.2 configured for RedSwampCrayfish_MISGP project
+R installation: /mnt/ufs18/rs-012/Scribner_Lab/projects/RedSwampCrayfish_MISGP/OUT/rscABC//SRC/R-4.1.2-install
+R libraries: /mnt/ufs18/rs-012/Scribner_Lab/projects/RedSwampCrayfish_MISGP/OUT/rscABC//SRC/myR/x86_64-pc-linux-gnu-library/4.1
+Using R version: WARNING: ignoring environment value of R_HOME
+Available packages: 264
+WARNING: ignoring environment value of R_HOME
+Loading required package: abc.data
+Loading required package: nnet
+Loading required package: quantreg
+Loading required package: SparseM
+Loading required package: MASS
+Loading required package: locfit
+locfit 1.5-9.12 	 2025-03-05
+Warning message:
+In dir.create("rsc.modSel") : 'rsc.modSel' already exists
+[1] "Mod is a factor, proceeding..."
+Growing trees.. Progress: 3%. Estimated remaining time: 17 minutes, 14 seconds.
+Growing trees.. Progress: 6%. Estimated remaining time: 16 minutes, 27 seconds.
+Growing trees.. Progress: 9%. Estimated remaining time: 16 minutes, 0 seconds.
+Growing trees.. Progress: 12%. Estimated remaining time: 15 minutes, 13 seconds.
+Growing trees.. Progress: 15%. Estimated remaining time: 14 minutes, 33 seconds.
+Growing trees.. Progress: 19%. Estimated remaining time: 13 minutes, 50 seconds.
+Growing trees.. Progress: 22%. Estimated remaining time: 13 minutes, 7 seconds.
+Growing trees.. Progress: 25%. Estimated remaining time: 12 minutes, 32 seconds.
+Growing trees.. Progress: 29%. Estimated remaining time: 11 minutes, 53 seconds.
+Growing trees.. Progress: 32%. Estimated remaining time: 11 minutes, 21 seconds.
+Growing trees.. Progress: 35%. Estimated remaining time: 10 minutes, 50 seconds.
+Growing trees.. Progress: 38%. Estimated remaining time: 10 minutes, 18 seconds.
+Growing trees.. Progress: 42%. Estimated remaining time: 9 minutes, 43 seconds.
+Growing trees.. Progress: 45%. Estimated remaining time: 9 minutes, 9 seconds.
+Growing trees.. Progress: 48%. Estimated remaining time: 8 minutes, 37 seconds.
+Growing trees.. Progress: 51%. Estimated remaining time: 8 minutes, 4 seconds.
+Growing trees.. Progress: 54%. Estimated remaining time: 7 minutes, 35 seconds.
+Growing trees.. Progress: 58%. Estimated remaining time: 7 minutes, 1 seconds.
+Growing trees.. Progress: 61%. Estimated remaining time: 6 minutes, 30 seconds.
+Growing trees.. Progress: 64%. Estimated remaining time: 6 minutes, 1 seconds.
+Growing trees.. Progress: 67%. Estimated remaining time: 5 minutes, 30 seconds.
+Growing trees.. Progress: 70%. Estimated remaining time: 5 minutes, 1 seconds.
+Growing trees.. Progress: 73%. Estimated remaining time: 4 minutes, 28 seconds.
+Growing trees.. Progress: 76%. Estimated remaining time: 3 minutes, 57 seconds.
+Growing trees.. Progress: 80%. Estimated remaining time: 3 minutes, 25 seconds.
+Growing trees.. Progress: 83%. Estimated remaining time: 2 minutes, 53 seconds.
+Growing trees.. Progress: 86%. Estimated remaining time: 2 minutes, 24 seconds.
+Growing trees.. Progress: 89%. Estimated remaining time: 1 minute, 55 seconds.
+Growing trees.. Progress: 91%. Estimated remaining time: 1 minute, 32 seconds.
+Growing trees.. Progress: 93%. Estimated remaining time: 1 minute, 8 seconds.
+Growing trees.. Progress: 96%. Estimated remaining time: 45 seconds.
+Growing trees.. Progress: 98%. Estimated remaining time: 20 seconds.
+Growing trees.. Progress: 100%. Estimated remaining time: 4 seconds.
+Computing prediction error.. Progress: 16%. Estimated remaining time: 2 minutes, 41 seconds.
+Computing prediction error.. Progress: 33%. Estimated remaining time: 2 minutes, 8 seconds.
+Computing prediction error.. Progress: 49%. Estimated remaining time: 1 minute, 36 seconds.
+Computing prediction error.. Progress: 66%. Estimated remaining time: 1 minute, 4 seconds.
+Computing prediction error.. Progress: 82%. Estimated remaining time: 34 seconds.
+Computing prediction error.. Progress: 96%. Estimated remaining time: 8 seconds.
+Growing trees.. Progress: 1%. Estimated remaining time: 51 minutes, 9 seconds.
+Growing trees.. Progress: 2%. Estimated remaining time: 51 minutes, 27 seconds.
+Growing trees.. Progress: 3%. Estimated remaining time: 51 minutes, 11 seconds.
+Growing trees.. Progress: 4%. Estimated remaining time: 50 minutes, 48 seconds.
+Growing trees.. Progress: 5%. Estimated remaining time: 50 minutes, 21 seconds.
+Growing trees.. Progress: 6%. Estimated remaining time: 49 minutes, 52 seconds.
+Growing trees.. Progress: 7%. Estimated remaining time: 49 minutes, 22 seconds.
+Growing trees.. Progress: 8%. Estimated remaining time: 48 minutes, 52 seconds.
+Growing trees.. Progress: 9%. Estimated remaining time: 48 minutes, 21 seconds.
+Growing trees.. Progress: 10%. Estimated remaining time: 47 minutes, 42 seconds.
+Growing trees.. Progress: 11%. Estimated remaining time: 47 minutes, 11 seconds.
+Growing trees.. Progress: 12%. Estimated remaining time: 46 minutes, 41 seconds.
+Growing trees.. Progress: 13%. Estimated remaining time: 46 minutes, 10 seconds.
+Growing trees.. Progress: 14%. Estimated remaining time: 45 minutes, 39 seconds.
+Growing trees.. Progress: 15%. Estimated remaining time: 44 minutes, 58 seconds.
+Growing trees.. Progress: 16%. Estimated remaining time: 44 minutes, 13 seconds.
+Growing trees.. Progress: 17%. Estimated remaining time: 43 minutes, 30 seconds.
+Growing trees.. Progress: 18%. Estimated remaining time: 42 minutes, 47 seconds.
+Growing trees.. Progress: 20%. Estimated remaining time: 42 minutes, 6 seconds.
+Growing trees.. Progress: 21%. Estimated remaining time: 41 minutes, 22 seconds.
+Growing trees.. Progress: 22%. Estimated remaining time: 40 minutes, 42 seconds.
+Growing trees.. Progress: 23%. Estimated remaining time: 40 minutes, 4 seconds.
+Growing trees.. Progress: 24%. Estimated remaining time: 39 minutes, 22 seconds.
+Growing trees.. Progress: 25%. Estimated remaining time: 38 minutes, 42 seconds.
+Growing trees.. Progress: 26%. Estimated remaining time: 38 minutes, 2 seconds.
+Growing trees.. Progress: 27%. Estimated remaining time: 37 minutes, 25 seconds.
+Growing trees.. Progress: 28%. Estimated remaining time: 36 minutes, 49 seconds.
+Growing trees.. Progress: 29%. Estimated remaining time: 36 minutes, 10 seconds.
+Growing trees.. Progress: 31%. Estimated remaining time: 35 minutes, 35 seconds.
+Growing trees.. Progress: 32%. Estimated remaining time: 34 minutes, 59 seconds.
+Growing trees.. Progress: 33%. Estimated remaining time: 34 minutes, 24 seconds.
+Growing trees.. Progress: 34%. Estimated remaining time: 33 minutes, 49 seconds.
+Growing trees.. Progress: 35%. Estimated remaining time: 33 minutes, 15 seconds.
+Growing trees.. Progress: 36%. Estimated remaining time: 32 minutes, 39 seconds.
+Growing trees.. Progress: 37%. Estimated remaining time: 32 minutes, 4 seconds.
+Growing trees.. Progress: 38%. Estimated remaining time: 31 minutes, 27 seconds.
+Growing trees.. Progress: 39%. Estimated remaining time: 30 minutes, 53 seconds.
+Growing trees.. Progress: 40%. Estimated remaining time: 30 minutes, 18 seconds.
+Growing trees.. Progress: 42%. Estimated remaining time: 29 minutes, 43 seconds.
+Growing trees.. Progress: 43%. Estimated remaining time: 29 minutes, 8 seconds.
+Growing trees.. Progress: 44%. Estimated remaining time: 28 minutes, 33 seconds.
+Growing trees.. Progress: 45%. Estimated remaining time: 27 minutes, 58 seconds.
+Growing trees.. Progress: 46%. Estimated remaining time: 27 minutes, 23 seconds.
+Growing trees.. Progress: 47%. Estimated remaining time: 26 minutes, 49 seconds.
+Growing trees.. Progress: 48%. Estimated remaining time: 26 minutes, 14 seconds.
+Growing trees.. Progress: 49%. Estimated remaining time: 25 minutes, 39 seconds.
+Growing trees.. Progress: 50%. Estimated remaining time: 25 minutes, 5 seconds.
+Growing trees.. Progress: 51%. Estimated remaining time: 24 minutes, 32 seconds.
+Growing trees.. Progress: 53%. Estimated remaining time: 23 minutes, 57 seconds.
+Growing trees.. Progress: 54%. Estimated remaining time: 23 minutes, 24 seconds.
+Growing trees.. Progress: 55%. Estimated remaining time: 22 minutes, 49 seconds.
+Growing trees.. Progress: 56%. Estimated remaining time: 22 minutes, 15 seconds.
+Growing trees.. Progress: 57%. Estimated remaining time: 21 minutes, 41 seconds.
+Growing trees.. Progress: 58%. Estimated remaining time: 21 minutes, 7 seconds.
+Growing trees.. Progress: 59%. Estimated remaining time: 20 minutes, 34 seconds.
+Growing trees.. Progress: 60%. Estimated remaining time: 20 minutes, 0 seconds.
+Growing trees.. Progress: 61%. Estimated remaining time: 19 minutes, 27 seconds.
+Growing trees.. Progress: 62%. Estimated remaining time: 18 minutes, 54 seconds.
+Growing trees.. Progress: 64%. Estimated remaining time: 18 minutes, 20 seconds.
+Growing trees.. Progress: 65%. Estimated remaining time: 17 minutes, 46 seconds.
+Growing trees.. Progress: 66%. Estimated remaining time: 17 minutes, 13 seconds.
+Growing trees.. Progress: 67%. Estimated remaining time: 16 minutes, 39 seconds.
+Growing trees.. Progress: 68%. Estimated remaining time: 16 minutes, 5 seconds.
+Growing trees.. Progress: 69%. Estimated remaining time: 15 minutes, 32 seconds.
+Growing trees.. Progress: 70%. Estimated remaining time: 14 minutes, 59 seconds.
+Growing trees.. Progress: 71%. Estimated remaining time: 14 minutes, 25 seconds.
+Growing trees.. Progress: 72%. Estimated remaining time: 13 minutes, 52 seconds.
+Growing trees.. Progress: 73%. Estimated remaining time: 13 minutes, 19 seconds.
+Growing trees.. Progress: 75%. Estimated remaining time: 12 minutes, 46 seconds.
+Growing trees.. Progress: 76%. Estimated remaining time: 12 minutes, 12 seconds.
+Growing trees.. Progress: 77%. Estimated remaining time: 11 minutes, 39 seconds.
+Growing trees.. Progress: 78%. Estimated remaining time: 11 minutes, 6 seconds.
+Growing trees.. Progress: 79%. Estimated remaining time: 10 minutes, 33 seconds.
+Growing trees.. Progress: 80%. Estimated remaining time: 10 minutes, 0 seconds.
+Growing trees.. Progress: 81%. Estimated remaining time: 9 minutes, 27 seconds.
+Growing trees.. Progress: 82%. Estimated remaining time: 8 minutes, 54 seconds.
+Growing trees.. Progress: 83%. Estimated remaining time: 8 minutes, 20 seconds.
+Growing trees.. Progress: 84%. Estimated remaining time: 7 minutes, 47 seconds.
+Growing trees.. Progress: 86%. Estimated remaining time: 7 minutes, 14 seconds.
+Growing trees.. Progress: 87%. Estimated remaining time: 6 minutes, 41 seconds.
+Growing trees.. Progress: 88%. Estimated remaining time: 6 minutes, 8 seconds.
+Growing trees.. Progress: 89%. Estimated remaining time: 5 minutes, 35 seconds.
+Growing trees.. Progress: 90%. Estimated remaining time: 5 minutes, 2 seconds.
+Growing trees.. Progress: 91%. Estimated remaining time: 4 minutes, 29 seconds.
+Growing trees.. Progress: 92%. Estimated remaining time: 3 minutes, 56 seconds.
+Growing trees.. Progress: 93%. Estimated remaining time: 3 minutes, 23 seconds.
+Growing trees.. Progress: 94%. Estimated remaining time: 2 minutes, 50 seconds.
+Growing trees.. Progress: 95%. Estimated remaining time: 2 minutes, 17 seconds.
+Growing trees.. Progress: 97%. Estimated remaining time: 1 minute, 44 seconds.
+Growing trees.. Progress: 98%. Estimated remaining time: 1 minute, 11 seconds.
+Growing trees.. Progress: 99%. Estimated remaining time: 38 seconds.
+Growing trees.. Progress: 100%. Estimated remaining time: 5 seconds.
+Computing prediction error.. Progress: 5%. Estimated remaining time: 10 minutes, 1 seconds.
+Computing prediction error.. Progress: 10%. Estimated remaining time: 9 minutes, 37 seconds.
+Computing prediction error.. Progress: 14%. Estimated remaining time: 9 minutes, 8 seconds.
+Computing prediction error.. Progress: 19%. Estimated remaining time: 8 minutes, 38 seconds.
+Computing prediction error.. Progress: 24%. Estimated remaining time: 8 minutes, 11 seconds.
+Computing prediction error.. Progress: 29%. Estimated remaining time: 7 minutes, 37 seconds.
+Computing prediction error.. Progress: 34%. Estimated remaining time: 7 minutes, 7 seconds.
+Computing prediction error.. Progress: 39%. Estimated remaining time: 6 minutes, 35 seconds.
+Computing prediction error.. Progress: 44%. Estimated remaining time: 6 minutes, 4 seconds.
+Computing prediction error.. Progress: 49%. Estimated remaining time: 5 minutes, 33 seconds.
+Computing prediction error.. Progress: 53%. Estimated remaining time: 5 minutes, 2 seconds.
+Computing prediction error.. Progress: 58%. Estimated remaining time: 4 minutes, 30 seconds.
+Computing prediction error.. Progress: 63%. Estimated remaining time: 3 minutes, 58 seconds.
+Computing prediction error.. Progress: 68%. Estimated remaining time: 3 minutes, 28 seconds.
+Computing prediction error.. Progress: 73%. Estimated remaining time: 2 minutes, 55 seconds.
+Computing prediction error.. Progress: 78%. Estimated remaining time: 2 minutes, 24 seconds.
+Computing prediction error.. Progress: 83%. Estimated remaining time: 1 minute, 53 seconds.
+Computing prediction error.. Progress: 87%. Estimated remaining time: 1 minute, 21 seconds.
+Computing prediction error.. Progress: 92%. Estimated remaining time: 49 seconds.
+Computing prediction error.. Progress: 97%. Estimated remaining time: 18 seconds.
+   selected model votes model1 votes model2 votes model3 votes model4
+1 SHD_bridge_pROW            8            8          219            0
+2 SHD_bridge_pROW            8            8          219            0
+  votes model5 votes model6 votes model7 votes model8 votes model9
+1          110            6          404            2          187
+2          110            6          404            2          187
+  votes model10 post.proba
+1            56  0.6286167
+2            56  0.6286167

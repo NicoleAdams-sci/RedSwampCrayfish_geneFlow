@@ -1,0 +1,7 @@
+Var1 Var2 value zScore
+Apt1 Apt1 0 0.211
+Apt2 Apt1 -0.139 -1.685
+Apt3 Apt1 -0.04 -0.334
+Apt2 Apt2 0 0.211
+Apt3 Apt2 0.086 1.384
+Apt3 Apt3 0 0.211

@@ -1,0 +1,1677 @@
+---
+title: "Genetic diversity of P. clarkii in SE MI"
+author: "Nicole Adams"
+date: "2025-04-13"
+output: 
+  html_document:
+    toc: true
+    code_folding: show
+---
+
+```{r setup, include=FALSE, echo=TRUE}
+# Load necessary packages
+library(tidyverse)
+library(RColorBrewer)
+library(vcfR)
+library(reshape2)
+library(hierfstat)
+library(strataG)
+library(poppr)
+library(mmod)
+library(kableExtra)
+library(ggrepel)
+library(ggpubr)
+library(grid)
+library(ape)
+
+# Project root for KNIT (applies to all chunks)
+root <- normalizePath("~/Documents/crayfish_lab/RedSwampCrayfish_geneFlow", mustWork = TRUE)
+knitr::opts_knit$set(root.dir = root)
+
+# For interactive running in RStudio only
+if (interactive()) setwd(root)
+
+# Source functions to fix population names
+source("sensitive/population_name_functions.R")
+
+# Define Rmd knit options
+knitr::opts_knit$set(root.dir = "..")
+knitr::opts_chunk$set(
+	fig.height = 6,
+	fig.width = 8,
+	warning = FALSE, # suppress warnings
+	message = FALSE # suppress messages
+)
+#echo = FALSE # defaults to not showing R code, change chunk to echo=TRUE where wanted
+
+# Set eval=FALSE for all bash chunks
+knitr::opts_hooks$set(
+  engine = function(options) {
+    if (options$engine == "bash") {
+      options$eval <- FALSE
+    }
+    options
+  }
+)
+```
+
+# Genetic diversity of RSC sequences from Homola and Adams
+Code to evaluate genetic diversity, conduct Mantel tests and a neighbor joining tree for RSC.<br>
+For details on sequence data processing see dataProcessing_fastq2bams_Sard-Homola.Rmd and dataProcessing_fastq2bams_Adams.Rmd for steps taken prior to genotyping.<br>
+
+# Load in VCF
+Load VCF and fix waterbody names
+```{r}
+dat.vcf <-  read.vcfR(file="../data/jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.ab_1pRt_100kb.recode.vcf")
+dat.genind <- vcfR2genind(dat.vcf, sep = "[|/]") ## Create genind object - 763 individuals; 2,675 loci
+
+# get pop names
+dat.pops <- dat.genind@tab[,1] %>%
+  names() %>%
+  as_tibble %>%
+  separate(value, into = (c("Pop", NA))) 
+
+# fix names
+dat.pops$Pop <- convert_pop_names(dat.pops$Pop)
+dat.pops <- dat.pops %>% mutate(Pop = as.factor(Pop))
+rownames(dat.genind$tab) <- gsub("FC815-212", "FC8-15-212", rownames(dat.genind$tab))
+
+dat.genind@pop <- dat.pops$Pop
+
+```
+
+&nbsp;
+
+## Remove waterbodies w N<5
+```{r}
+Ntab <- as.data.frame(table(dat.genind$pop))
+Ntab2 <- Ntab %>% filter(Freq > 4)
+dat.genind.hiN <- poppr::popsub(dat.genind, sublist=c(Ntab2$Var1))
+
+```
+
+&nbsp;
+
+## Evaluate missingness
+```{r}
+# calculate the percentage of complete genotypes per loci 
+locmiss <- propTyped(dat.genind.hiN, by = "loc") #adegenet
+
+# print loci with < 80% complete genotypes
+#locmiss[which(locmiss < 0.80)] 
+
+# remove loci with > 20% missing data
+dat.genind.hiN.miss20 = missingno(dat.genind.hiN, type = "loci", cutoff = 0.20) #poppr
+# from dat.genind = Found 923026 missing values. 1365 loci contained missing values greater than 20% (that's 50% of loci...)
+# from dat.genind.hiN = Found 914882 missing values. 1360 loci contained missing values greater than 20% (that's 50% of loci...)
+
+# check missingness by individual
+indmiss <- propTyped(dat.genind.hiN.miss20, by = "ind")
+
+# print individuals with < 80% complete genotypes
+#indmiss[ which(indmiss < 0.80) ] 
+# Remove individuals with > 20% missing genotypes
+dat.genind.hiN.miss20.imiss20 <- missingno(dat.genind.hiN.miss20, type = "geno", cutoff = 0.20)
+
+summary(dat.genind.hiN.miss20.imiss20$pop) 
+# from dat.genind = 658 individuals; 1,310 loci
+# from dat.genind.hiN = 653 individuals; 1,315 loci
+
+
+dat.genind.hiN.miss20.imiss20$pop <- factor(dat.genind.hiN.miss20.imiss20$pop, levels=c("Apt1", "Apt2", "Apt3", "WestGC1", "WestGC2", "WestGC3", "WestGC6", "Hotel5", "Hotel1", "Hotel2", "Hotel3", "Hotel4", "EastGC1", "EastGC7", "EastGC9", "EastGC10","EastGC11", "EastGC13", "EastGC2", "EastGC3", "EastGC4", "Private1", "Drain1"))
+
+```
+
+&nbsp;
+
+# Sample size per waterbody (N)
+Table 1 -- sample size
+```{r}
+samp.sz <- summary(dat.genind.hiN.miss20.imiss20$pop)
+samp.sz.m <- samp.sz %>% melt() %>% mutate(waterbody=rownames(.)) %>% rename(N=value) 
+
+kable(samp.sz.m %>% dplyr::select(-waterbody), caption = "Sample size (N)") %>% kable_styling() %>% scroll_box(width = "500px", height = "500px")
+```
+
+&nbsp;
+
+## Tally sex
+Table 1 -- sample size for sex
+```{r}
+genind_samples <- as.data.frame(rownames(dat.genind.hiN.miss20.imiss20@tab))
+genind_samples <- genind_samples %>% rename("Sample.Name"=`rownames(dat.genind.hiN.miss20.imiss20@tab)`)
+
+# Add metadata
+full.meta <- read.csv("data/metadata_N1278.csv")
+
+genind.meta <- left_join(genind_samples, full.meta)
+
+genind.meta$site_name <- gsub("Apartment1", "Apt1", genind.meta$site_name)
+genind.meta$site_name <- gsub("Apartment2", "Apt2", genind.meta$site_name)
+genind.meta$site_name <- gsub("Apartment3", "Apt3", genind.meta$site_name)
+
+genind.meta$site_name <- factor(genind.meta$site_name, levels=c("Apt1", "Apt2", "Apt3", "WestGC1", "WestGC2", "WestGC3", "WestGC6", "Hotel5", "Hotel1", "Hotel2", "Hotel3", "Hotel4", "EastGC1", "EastGC7", "EastGC9", "EastGC10","EastGC11", "EastGC13", "EastGC2", "EastGC3", "EastGC4", "Private1", "Drain1"))
+
+sex_tally <- genind.meta %>% 
+  filter(!is.na(sex)) %>%
+  rename("waterbody" = site_name) %>%
+  group_by(waterbody, sex) %>% 
+  tally() %>%
+  pivot_wider(names_from = sex, values_from = n, values_fill = 0)
+
+
+# make sure samples are in same order
+identical(genind_samples$Sample.Name, genind.meta$Sample.Name) #TRUE
+
+# add sex to genind object
+genind.meta <- genind.meta %>% mutate(sex = as.factor(sex))
+dat.genind.hiN.miss20.imiss20@other <- list(
+  sex = genind.meta$sex,
+  ecotype = genind.meta$Ecotype
+  # add other metadata as needed
+)
+```
+
+&nbsp;
+
+# Private alleles (Ap)
+Table 1 - Private alleles per waterbody across all loci
+```{r}
+priv.al <- colSums(privateAlleles(genind2gtypes(dat.genind.hiN.miss20.imiss20))) #strataG
+priv.al.m <- priv.al %>% melt() %>% mutate(waterbody=rownames(.)) %>% rename(privateAlleles=value)
+
+# define groups
+priv.al.m$group <- case_when(
+  priv.al.m$waterbody %in% c("Drain1") ~ "Group5",
+  priv.al.m$waterbody %in% c("Apt1", "Apt2", "Apt3") ~ "Group1",
+  priv.al.m$waterbody %in% c("WestGC1", "WestGC2", "WestGC3", "WestGC6", "Hotel5") ~ "Group2_WestGC",
+  priv.al.m$waterbody %in% c("Hotel1", "Hotel2", "Hotel3", "Hotel4") ~ "Group2_Hotel",
+  priv.al.m$waterbody %in% c("EastGC11", "EastGC10", "EastGC7", "EastGC13", "EastGC1", "EastGC9") ~ "Group3_EastGC_SW",
+  priv.al.m$waterbody %in% c("EastGC2", "EastGC3", "EastGC4") ~ "Group3_EastGC_NE",
+  priv.al.m$waterbody %in% c("Private1") ~ "Group4",
+  TRUE ~ NA_character_
+)
+
+priv.al.m$group <- factor(priv.al.m$group, levels = c("Group1", "Group2_WestGC", "Group2_Hotel", "Group3_EastGC_NE", "Group3_EastGC_SW", "Group4", "Group5"))
+priv.al.m$waterbody <- factor(priv.al.m$waterbody, levels=c("Apt1", "Apt2", "Apt3", "WestGC1", "WestGC2", "WestGC6", "Hotel1", "Hotel2", "Hotel3", "Hotel4", "EastGC1", "EastGC7", "EastGC10","EastGC11", "EastGC13", "EastGC2", "EastGC3", "EastGC4", "Private1", "Drain1"))
+
+# total private alleles across all pops
+total_priv <- sum(priv.al)
+  
+cat("There are", total_priv, "total private alleles across all waterbodies.")
+
+
+kable(priv.al.m %>% dplyr::select(-waterbody) %>% dplyr::select(group, privateAlleles) %>% arrange(group), caption = "Private alleles (Ap)") %>% kable_styling() %>% scroll_box(width = "500px", height = "500px")
+
+```
+
+&nbsp;
+
+## Statistical difference in private alleles
+```{r}
+# Stat tests
+kruskal.test(priv.al.m$privateAlleles~priv.al.m$waterbody) # P=0.4568
+kruskal.test(priv.al.m$privateAlleles~priv.al.m$group) # P=0.06605
+
+pairwise.wilcox.test(priv.al.m$privateAlleles, priv.al.m$group,p.adjust.method = "BH")
+
+```
+
+&nbsp;
+
+## Private alleles by sex -- 
+Table S4 private alleles
+asking Do fe/males from Waterbody X have genetic variants that are not found in fe/males from any other waterbody?
+```{r}
+# Corrected sex-specific private alleles: males vs males, females vs females
+# Using poppr with proper counting method
+
+priv_by_sex_corrected <- data.frame(
+  waterbody = character(),
+  privateAlleles_F = numeric(),
+  privateAlleles_M = numeric(),
+  sufficient_F = logical(),
+  sufficient_M = logical(),
+  stringsAsFactors = FALSE
+)
+
+min_sample_size <- 5  # Minimum sample size per sex per waterbody
+
+cat("Calculating sex-specific private alleles using poppr...\n")
+cat("Minimum sample size per sex:", min_sample_size, "\n")
+
+# MALES vs MALES analysis
+cat("\n=== MALES ANALYSIS ===\n")
+male_indices <- which(dat.genind.hiN.miss20.imiss20@other$sex == "male" & 
+                      !is.na(dat.genind.hiN.miss20.imiss20@other$sex))
+
+if(length(male_indices) > 0) {
+  males_genind <- dat.genind.hiN.miss20.imiss20[male_indices]
+  male_pop_sizes <- table(pop(males_genind))
+  cat("Male sample sizes per waterbody:\n")
+  print(male_pop_sizes)
+  
+  # Only keep waterbodies with sufficient males
+  sufficient_male_pops <- names(male_pop_sizes)[male_pop_sizes >= min_sample_size]
+  cat("Waterbodies with sufficient males (≥", min_sample_size, "):\n")
+  print(sufficient_male_pops)
+  
+  if(length(sufficient_male_pops) > 0) {
+    males_genind_filtered <- males_genind[pop(males_genind) %in% sufficient_male_pops]
+    
+    tryCatch({
+      # Calculate private alleles among males only
+      male_priv_matrix <- private_alleles(males_genind_filtered, count.alleles = TRUE)
+      male_priv <- rowSums(male_priv_matrix > 0)  # Count loci with private alleles, not allele copies
+      cat("Male private alleles calculated successfully!\n")
+      print(male_priv)
+    }, error = function(e) {
+      cat("Error in male analysis:", e$message, "\n")
+      male_priv <- numeric(0)
+    })
+  } else {
+    male_priv <- numeric(0)
+    cat("No waterbodies with sufficient male sample sizes\n")
+  }
+} else {
+  male_priv <- numeric(0)
+  cat("No male samples found\n")
+}
+
+# FEMALES vs FEMALES analysis  
+cat("\n=== FEMALES ANALYSIS ===\n")
+female_indices <- which(dat.genind.hiN.miss20.imiss20@other$sex == "female" & 
+                        !is.na(dat.genind.hiN.miss20.imiss20@other$sex))
+
+if(length(female_indices) > 0) {
+  females_genind <- dat.genind.hiN.miss20.imiss20[female_indices]
+  female_pop_sizes <- table(pop(females_genind))
+  cat("Female sample sizes per waterbody:\n")
+  print(female_pop_sizes)
+  
+  # Only keep waterbodies with sufficient females
+  sufficient_female_pops <- names(female_pop_sizes)[female_pop_sizes >= min_sample_size]
+  cat("Waterbodies with sufficient females (≥", min_sample_size, "):\n")
+  print(sufficient_female_pops)
+  
+  if(length(sufficient_female_pops) > 0) {
+    females_genind_filtered <- females_genind[pop(females_genind) %in% sufficient_female_pops]
+    
+    tryCatch({
+      # Calculate private alleles among females only
+      female_priv_matrix <- private_alleles(females_genind_filtered, count.alleles = TRUE)
+      female_priv <- rowSums(female_priv_matrix > 0)  # Count loci with private alleles, not allele copies
+      cat("Female private alleles calculated successfully!\n")
+      print(female_priv)
+    }, error = function(e) {
+      cat("Error in female analysis:", e$message, "\n")
+      female_priv <- numeric(0)
+    })
+  } else {
+    female_priv <- numeric(0)
+    cat("No waterbodies with sufficient female sample sizes\n")
+  }
+} else {
+  female_priv <- numeric(0)
+  cat("No female samples found\n")
+}
+
+# Combine results into final table
+cat("\n=== COMBINING RESULTS ===\n")
+for(wb in unique(pop(dat.genind.hiN.miss20.imiss20))) {
+  priv_f <- ifelse(wb %in% names(female_priv), female_priv[wb], 0)
+  priv_m <- ifelse(wb %in% names(male_priv), male_priv[wb], 0)
+  
+  suff_f <- wb %in% sufficient_female_pops
+  suff_m <- wb %in% sufficient_male_pops
+  
+  priv_by_sex_corrected <- rbind(priv_by_sex_corrected, data.frame(
+    waterbody = as.character(wb),
+    privateAlleles_F = priv_f,
+    privateAlleles_M = priv_m,
+    sufficient_F = suff_f,
+    sufficient_M = suff_m
+  ))
+}
+
+# re order waterbodies
+priv_by_sex_corrected$waterbody <- factor(priv_by_sex_corrected$waterbody, levels=c("Apt1", "Apt2", "Apt3", "WestGC1", "WestGC2", "WestGC6", "Hotel1", "Hotel2", "Hotel3", "Hotel4", "EastGC1", "EastGC7", "EastGC10","EastGC11", "EastGC13", "EastGC2", "EastGC3", "EastGC4", "Private1", "Drain1"))
+priv_by_sex_corrected <- priv_by_sex_corrected %>% arrange(waterbody)
+
+cat("\nFinal sex-specific private alleles results:\n")
+print(priv_by_sex_corrected)
+
+# Add comparison columns
+priv_by_sex_corrected$sex_difference <- priv_by_sex_corrected$privateAlleles_M - priv_by_sex_corrected$privateAlleles_F
+priv_by_sex_corrected$total_sex_private <- priv_by_sex_corrected$privateAlleles_M + priv_by_sex_corrected$privateAlleles_F
+
+cat("\nWith comparison columns:\n")
+print(priv_by_sex_corrected)
+
+# Add percentage-based comparison columns
+priv_by_sex_corrected$sex_difference_raw <- priv_by_sex_corrected$privateAlleles_M - priv_by_sex_corrected$privateAlleles_F
+priv_by_sex_corrected$total_sex_private <- priv_by_sex_corrected$privateAlleles_M + priv_by_sex_corrected$privateAlleles_F
+
+# Calculate percentage differences (avoid division by zero)
+priv_by_sex_corrected$percent_male <- ifelse(priv_by_sex_corrected$total_sex_private > 0, 
+                                            (priv_by_sex_corrected$privateAlleles_M / priv_by_sex_corrected$total_sex_private) * 100, 
+                                            NA)
+
+priv_by_sex_corrected$percent_female <- ifelse(priv_by_sex_corrected$total_sex_private > 0, 
+                                              (priv_by_sex_corrected$privateAlleles_F / priv_by_sex_corrected$total_sex_private) * 100, 
+                                              NA)
+
+# Sex bias: positive = male-biased, negative = female-biased
+priv_by_sex_corrected$sex_bias_percent <- priv_by_sex_corrected$percent_male - priv_by_sex_corrected$percent_female
+
+# Alternatively, calculate as deviation from 50:50
+priv_by_sex_corrected$deviation_from_equal <- abs(priv_by_sex_corrected$percent_male - 50)
+
+cat("\nUpdated results with percentage comparisons:\n")
+print(priv_by_sex_corrected[c("waterbody", "privateAlleles_F", "privateAlleles_M", 
+                             "total_sex_private", "percent_female", "percent_male", 
+                             "sex_bias_percent", "deviation_from_equal", 
+                             "sufficient_F", "sufficient_M")])
+
+# Updated interpretation focusing on percentage bias
+cat("\n=== INVASION ECOLOGY INTERPRETATION (Percentage-based) ===\n")
+
+# Waterbodies with strong male bias (>70% male)
+cat("Waterbodies with strong male bias (>70% male private alleles):\n")
+male_biased <- priv_by_sex_corrected[priv_by_sex_corrected$percent_male > 70 & 
+                                   !is.na(priv_by_sex_corrected$percent_male) &
+                                   priv_by_sex_corrected$sufficient_F & 
+                                   priv_by_sex_corrected$sufficient_M &
+                                   priv_by_sex_corrected$total_sex_private > 5, ]  # Only meaningful if >5 total
+if(nrow(male_biased) > 0) {
+  print(male_biased[c("waterbody", "percent_male", "privateAlleles_M", "privateAlleles_F")])
+} else {
+  cat("None\n")
+}
+
+# Waterbodies with strong female bias (>70% female)
+cat("\nWaterbodies with strong female bias (>70% female private alleles):\n")
+female_biased <- priv_by_sex_corrected[priv_by_sex_corrected$percent_female > 70 & 
+                                     !is.na(priv_by_sex_corrected$percent_female) &
+                                     priv_by_sex_corrected$sufficient_F & 
+                                     priv_by_sex_corrected$sufficient_M &
+                                     priv_by_sex_corrected$total_sex_private > 5, ]
+if(nrow(female_biased) > 0) {
+  print(female_biased[c("waterbody", "percent_female", "privateAlleles_F", "privateAlleles_M")])
+} else {
+  cat("None\n")
+}
+
+# Waterbodies with balanced sex patterns (40-60% either sex)
+cat("\nWaterbodies with balanced sex patterns (40-60% either sex):\n")
+balanced <- priv_by_sex_corrected[priv_by_sex_corrected$percent_male >= 40 & 
+                                priv_by_sex_corrected$percent_male <= 60 & 
+                                !is.na(priv_by_sex_corrected$percent_male) &
+                                priv_by_sex_corrected$sufficient_F & 
+                                priv_by_sex_corrected$sufficient_M &
+                                priv_by_sex_corrected$total_sex_private > 5, ]
+if(nrow(balanced) > 0) {
+  print(balanced[c("waterbody", "percent_male", "percent_female", "total_sex_private")])
+} else {
+  cat("None\n")
+}
+
+# Summary statistics
+valid_data <- priv_by_sex_corrected[priv_by_sex_corrected$sufficient_F & 
+                                  priv_by_sex_corrected$sufficient_M &
+                                  priv_by_sex_corrected$total_sex_private > 0, ]
+
+if(nrow(valid_data) > 0) {
+  cat("\n=== SUMMARY STATISTICS ===\n")
+  cat("Mean male percentage:", round(mean(valid_data$percent_male, na.rm = TRUE), 1), "%\n")
+  cat("Mean deviation from 50:50:", round(mean(valid_data$deviation_from_equal, na.rm = TRUE), 1), "%\n")
+  cat("Waterbodies with >20% deviation from equal:", sum(valid_data$deviation_from_equal > 20, na.rm = TRUE), 
+      "out of", nrow(valid_data), "\n")
+}
+
+priv.al.sex <- priv_by_sex_corrected %>% dplyr::select(waterbody, privateAlleles_F, privateAlleles_M)
+```
+
+&nbsp;
+
+# Allelic richness (Ar)
+Table 1 - Mean allelic richness per waterbody across all loci - note NAs
+```{r}
+rich.al <- colMeans(allelic.richness(genind2hierfstat(dat.genind.hiN.miss20.imiss20), min.n = 12)$Ar, na.rm = TRUE) #hierfstat # 1/11/24 added min.n=12 (number of alleles to be rarefied. Default is the min number of individuals genotyped (times 2)) Since SC and BB have N=6, then use 12
+rich.al.m <- rich.al %>% melt() %>% mutate(waterbody=rownames(.)) %>% rename(allelicRichness=value)
+
+# define groups
+rich.al.m$group <- case_when(
+  rich.al.m$waterbody %in% c("Drain1") ~ "Group5",
+  rich.al.m$waterbody %in% c("Apt1", "Apt2", "Apt3") ~ "Group1",
+  rich.al.m$waterbody %in% c("WestGC1", "WestGC2", "WestGC3", "WestGC6", "Hotel5") ~ "Group2_WestGC",
+  rich.al.m$waterbody %in% c("Hotel1", "Hotel2", "Hotel3", "Hotel4") ~ "Group2_Hotel",
+  rich.al.m$waterbody %in% c("EastGC1", "EastGC11", "EastGC10", "EastGC7", "EastGC13", "EastGC9") ~ "Group3_EastGC_SW",
+  rich.al.m$waterbody %in% c("EastGC2", "EastGC3", "EastGC4") ~ "Group3_EastGC_NE",
+  rich.al.m$waterbody %in% c("Private1") ~ "Group4",
+  TRUE ~ NA_character_
+)
+
+
+rich.al.m$group <- factor(rich.al.m$group, levels = c("Group1", "Group2_WestGC", "Group2_Hotel", "Group3_EastGC_NE", "Group3_EastGC_SW", "Group4", "Group5"))
+rich.al.m$waterbody <- factor(rich.al.m$waterbody, levels=c("Apt1", "Apt2", "Apt3", "WestGC1", "WestGC2", "WestGC3", "WestGC6", "Hotel5", "Hotel1", "Hotel2", "Hotel3", "Hotel4", "EastGC1", "EastGC7", "EastGC9", "EastGC10","EastGC11", "EastGC13", "EastGC2", "EastGC3", "EastGC4", "Private1", "Drain1"))
+
+
+kable(rich.al.m %>% dplyr::select(-waterbody) %>% dplyr::select(group, allelicRichness) %>% arrange(group), caption = "AllelicRichness (Ar)") %>% kable_styling() %>% scroll_box(width = "500px", height = "500px")
+
+```
+
+&nbsp;
+
+## Statistical difference in allelic richness
+```{r}
+# Stat tests
+kruskal.test(rich.al.m$allelicRichness~rich.al.m$waterbody) # P=0.4568
+kruskal.test(rich.al.m$allelicRichness~rich.al.m$group) # P=0.01091
+
+pairwise.wilcox.test(rich.al.m$allelicRichness, rich.al.m$group,p.adjust.method = "BH") #none after BH correction
+```
+
+&nbsp;
+
+## Allelic richness by sex --
+Do fe/males from each waterbody have different levels of allelic richness compared to fe/males from other waterbodies? Within each waterbody, which sex carries more genetic diversity?
+```{r}
+# Sex-specific allelic richness: males vs males, females vs females
+# Using hierfstat with proper rarefaction
+
+rich_by_sex <- data.frame(
+  waterbody = character(),
+  allelicRichness_F = numeric(),
+  allelicRichness_M = numeric(),
+  sufficient_F = logical(),
+  sufficient_M = logical(),
+  stringsAsFactors = FALSE
+)
+
+min_sample_size <- 6  # Minimum sample size per sex (since min.n = 12, need at least 6 individuals)
+
+cat("Calculating sex-specific allelic richness using hierfstat...\n")
+cat("Minimum sample size per sex:", min_sample_size, "(for min.n = 12 rarefaction)\n")
+
+# MALES allelic richness
+cat("\n=== MALES ALLELIC RICHNESS ===\n")
+male_indices <- which(dat.genind.hiN.miss20.imiss20@other$sex == "male" & 
+                      !is.na(dat.genind.hiN.miss20.imiss20@other$sex))
+
+if(length(male_indices) > 0) {
+  males_genind <- dat.genind.hiN.miss20.imiss20[male_indices]
+  male_pop_sizes <- table(pop(males_genind))
+  cat("Male sample sizes per waterbody:\n")
+  print(male_pop_sizes)
+  
+  # Only keep waterbodies with sufficient males
+  sufficient_male_pops <- names(male_pop_sizes)[male_pop_sizes >= min_sample_size]
+  cat("Waterbodies with sufficient males (≥", min_sample_size, "):\n")
+  print(sufficient_male_pops)
+  
+  if(length(sufficient_male_pops) > 0) {
+    males_genind_filtered <- males_genind[pop(males_genind) %in% sufficient_male_pops]
+    
+    tryCatch({
+      # Calculate allelic richness among males only
+      males_hierfstat <- genind2hierfstat(males_genind_filtered)
+      male_ar_matrix <- allelic.richness(males_hierfstat, min.n = 12)$Ar
+      male_ar <- colMeans(male_ar_matrix, na.rm = TRUE)
+      cat("Male allelic richness calculated successfully!\n")
+      print(male_ar)
+    }, error = function(e) {
+      cat("Error in male allelic richness analysis:", e$message, "\n")
+      male_ar <- numeric(0)
+    })
+  } else {
+    male_ar <- numeric(0)
+    cat("No waterbodies with sufficient male sample sizes\n")
+  }
+} else {
+  male_ar <- numeric(0)
+  cat("No male samples found\n")
+}
+
+# FEMALES allelic richness
+cat("\n=== FEMALES ALLELIC RICHNESS ===\n")
+female_indices <- which(dat.genind.hiN.miss20.imiss20@other$sex == "female" & 
+                        !is.na(dat.genind.hiN.miss20.imiss20@other$sex))
+
+if(length(female_indices) > 0) {
+  females_genind <- dat.genind.hiN.miss20.imiss20[female_indices]
+  female_pop_sizes <- table(pop(females_genind))
+  cat("Female sample sizes per waterbody:\n")
+  print(female_pop_sizes)
+  
+  # Only keep waterbodies with sufficient females
+  sufficient_female_pops <- names(female_pop_sizes)[female_pop_sizes >= min_sample_size]
+  cat("Waterbodies with sufficient females (≥", min_sample_size, "):\n")
+  print(sufficient_female_pops)
+  
+  if(length(sufficient_female_pops) > 0) {
+    females_genind_filtered <- females_genind[pop(females_genind) %in% sufficient_female_pops]
+    
+    tryCatch({
+      # Calculate allelic richness among females only
+      females_hierfstat <- genind2hierfstat(females_genind_filtered)
+      female_ar_matrix <- allelic.richness(females_hierfstat, min.n = 12)$Ar
+      female_ar <- colMeans(female_ar_matrix, na.rm = TRUE)
+      cat("Female allelic richness calculated successfully!\n")
+      print(female_ar)
+    }, error = function(e) {
+      cat("Error in female allelic richness analysis:", e$message, "\n")
+      female_ar <- numeric(0)
+    })
+  } else {
+    female_ar <- numeric(0)
+    cat("No waterbodies with sufficient female sample sizes\n")
+  }
+} else {
+  female_ar <- numeric(0)
+  cat("No female samples found\n")
+}
+
+# Combine results into final table
+cat("\n=== COMBINING ALLELIC RICHNESS RESULTS ===\n")
+for(wb in unique(pop(dat.genind.hiN.miss20.imiss20))) {
+  ar_f <- ifelse(wb %in% names(female_ar), female_ar[wb], NA)
+  ar_m <- ifelse(wb %in% names(male_ar), male_ar[wb], NA)
+  
+  suff_f <- wb %in% sufficient_female_pops
+  suff_m <- wb %in% sufficient_male_pops
+  
+  rich_by_sex <- rbind(rich_by_sex, data.frame(
+    waterbody = as.character(wb),
+    allelicRichness_F = ar_f,
+    allelicRichness_M = ar_m,
+    sufficient_F = suff_f,
+    sufficient_M = suff_m
+  ))
+}
+
+# Re order waterbodies
+rich_by_sex$waterbody <- factor(rich_by_sex$waterbody, levels=c("Apt1", "Apt2", "Apt3", "WestGC1", "WestGC2", "WestGC6", "Hotel1", "Hotel2", "Hotel3", "Hotel4", "EastGC1", "EastGC7", "EastGC10","EastGC11", "EastGC13", "EastGC2", "EastGC3", "EastGC4", "Private1", "Drain1"))
+rich_by_sex <- rich_by_sex %>% arrange(waterbody)
+
+cat("\nSex-specific allelic richness results:\n")
+print(rich_by_sex)
+
+
+# Calculate percentage-based comparisons for allelic richness
+rich_by_sex$ar_difference_raw <- rich_by_sex$allelicRichness_M - rich_by_sex$allelicRichness_F
+rich_by_sex$ar_total <- rich_by_sex$allelicRichness_M + rich_by_sex$allelicRichness_F
+
+# Calculate relative differences (as percentage of mean)
+rich_by_sex$ar_mean <- (rich_by_sex$allelicRichness_M + rich_by_sex$allelicRichness_F) / 2
+rich_by_sex$ar_percent_diff <- ifelse(!is.na(rich_by_sex$ar_mean) & rich_by_sex$ar_mean > 0,
+                                     (rich_by_sex$ar_difference_raw / rich_by_sex$ar_mean) * 100,
+                                     NA)
+
+# Calculate which sex has higher richness
+rich_by_sex$higher_richness <- ifelse(is.na(rich_by_sex$allelicRichness_F) | is.na(rich_by_sex$allelicRichness_M), 
+                                     "Insufficient data",
+                                     ifelse(rich_by_sex$allelicRichness_M > rich_by_sex$allelicRichness_F, 
+                                           "Male", 
+                                           ifelse(rich_by_sex$allelicRichness_F > rich_by_sex$allelicRichness_M, 
+                                                 "Female", "Equal")))
+
+cat("\nAllelic richness with comparisons:\n")
+print(rich_by_sex[c("waterbody", "allelicRichness_F", "allelicRichness_M", 
+                   "ar_difference_raw", "ar_percent_diff", "higher_richness",
+                   "sufficient_F", "sufficient_M")])
+
+# Compare with original allelic richness results
+comparison_ar <- merge(
+  rich.al.m[c("waterbody", "allelicRichness")], 
+  rich_by_sex[c("waterbody", "allelicRichness_F", "allelicRichness_M", "sufficient_F", "sufficient_M")], 
+  by = "waterbody", all = TRUE
+)
+comparison_ar <- comparison_ar %>% arrange(factor(waterbody, levels = levels(rich_by_sex$waterbody)))
+
+# Only show waterbodies where we could analyze both sexes
+comparison_ar_valid <- comparison_ar[comparison_ar$sufficient_F & comparison_ar$sufficient_M & 
+                                   !is.na(comparison_ar$sufficient_F) & !is.na(comparison_ar$sufficient_M), ]
+comparison_ar_valid <- comparison_ar_valid %>% arrange(factor(waterbody, levels = levels(rich_by_sex$waterbody)))
+
+cat("\n=== COMPARISON: Original vs Sex-specific Allelic Richness ===\n")
+print(comparison_ar_valid)
+
+# Interpretation for allelic richness
+cat("\n=== ALLELIC RICHNESS INTERPRETATION ===\n")
+
+valid_ar_data <- rich_by_sex[rich_by_sex$sufficient_F & rich_by_sex$sufficient_M &
+                           !is.na(rich_by_sex$allelicRichness_F) & !is.na(rich_by_sex$allelicRichness_M), ]
+
+if(nrow(valid_ar_data) > 0) {
+  cat("Waterbodies with higher male allelic richness:\n")
+  male_higher_ar <- valid_ar_data[valid_ar_data$higher_richness == "Male", ]
+  if(nrow(male_higher_ar) > 0) {
+    print(male_higher_ar[c("waterbody", "allelicRichness_M", "allelicRichness_F", "ar_percent_diff")])
+  } else cat("None\n")
+  
+  cat("\nWaterbodies with higher female allelic richness:\n")
+  female_higher_ar <- valid_ar_data[valid_ar_data$higher_richness == "Female", ]
+  if(nrow(female_higher_ar) > 0) {
+    print(female_higher_ar[c("waterbody", "allelicRichness_F", "allelicRichness_M", "ar_percent_diff")])
+  } else cat("None\n")
+  
+  cat("\nWaterbodies with >10% difference in allelic richness between sexes:\n")
+  large_diff_ar <- valid_ar_data[abs(valid_ar_data$ar_percent_diff) > 10 & !is.na(valid_ar_data$ar_percent_diff), ]
+  if(nrow(large_diff_ar) > 0) {
+    print(large_diff_ar[c("waterbody", "allelicRichness_F", "allelicRichness_M", "ar_percent_diff", "higher_richness")])
+  } else cat("None\n")
+  
+  cat("\n=== SUMMARY STATISTICS ===\n")
+  cat("Mean allelic richness - Males:", round(mean(valid_ar_data$allelicRichness_M, na.rm = TRUE), 3), "\n")
+  cat("Mean allelic richness - Females:", round(mean(valid_ar_data$allelicRichness_F, na.rm = TRUE), 3), "\n")
+  cat("Waterbodies with higher male richness:", sum(valid_ar_data$higher_richness == "Male"), "\n")
+  cat("Waterbodies with higher female richness:", sum(valid_ar_data$higher_richness == "Female"), "\n")
+  cat("Waterbodies with equal richness:", sum(valid_ar_data$higher_richness == "Equal"), "\n")
+}
+
+
+al.rich.sex <- rich_by_sex %>%
+  mutate(across(c(allelicRichness_F, allelicRichness_M), ~ round(.x, 3))) %>% dplyr::select(waterbody, allelicRichness_F, allelicRichness_M)
+
+```
+
+&nbsp;
+
+# Heterozygosity (Ho, He)
+Table 1 - Mean observed and expected heterozygosity per waterbody
+```{r}
+dat.genind.hiN.miss20.imiss20$pop <- factor(dat.genind.hiN.miss20.imiss20$pop)
+bs <- hierfstat::basic.stats(dat.genind.hiN.miss20.imiss20, diploid = TRUE) #hierfstat
+
+Ho_rsc <- colMeans(bs$Ho, na.rm = TRUE) #%>% round(digits = 2)
+He_rsc <- colMeans(bs$Hs, na.rm = TRUE) #%>% round(digits = 2)
+
+Het_rsc_df <- data.frame(waterbody = names(Ho_rsc), Ho = Ho_rsc, He = He_rsc) 
+Het_rsc_melt <- Het_rsc_df %>% reshape::melt(id.vars = "waterbody")
+
+# define groups
+Het_rsc_melt$group <- case_when(
+  Het_rsc_melt$waterbody %in% c("Drain1") ~ "Group5",
+  Het_rsc_melt$waterbody %in% c("Apt1", "Apt2", "Apt3") ~ "Group1",
+  Het_rsc_melt$waterbody %in% c("WestGC1", "WestGC2", "WestGC3", "WestGC6", "Hotel5") ~ "Group2_WestGC",
+  Het_rsc_melt$waterbody %in% c("Hotel1", "Hotel2", "Hotel3", "Hotel4") ~ "Group2_Hotel",
+  Het_rsc_melt$waterbody %in% c("EastGC1", "EastGC11", "EastGC10", "EastGC7", "EastGC13", "EastGC9") ~ "Group3_EastGC_SW",
+  Het_rsc_melt$waterbody %in% c("EastGC2", "EastGC3", "EastGC4") ~ "Group3_EastGC_NE",
+  Het_rsc_melt$waterbody %in% c("Private1") ~ "Group4",
+  TRUE ~ NA_character_
+)
+
+Het_rsc_melt$group <- factor(Het_rsc_melt$group, levels = c("Group1", "Group2_WestGC", "Group2_Hotel", "Group3_EastGC_NE", "Group3_EastGC_SW", "Group4", "Group5"))
+Het_rsc_melt$waterbody <- factor(Het_rsc_melt$waterbody, levels=c("Apt1", "Apt2", "Apt3", "WestGC1", "WestGC2", "WestGC3", "WestGC6", "Hotel5", "Hotel1", "Hotel2", "Hotel3", "Hotel4", "EastGC1", "EastGC7", "EastGC9", "EastGC10","EastGC11", "EastGC13", "EastGC2", "EastGC3", "EastGC4", "Private1", "Drain1"))
+
+
+
+# alt heterozygosity -- same method as simulation
+# he <- heterozygosity(genind2gtypes(dat.genind.hiN.miss20.imiss20), type="expected", by.strata=TRUE) # strataG
+# he2 <- he %>% group_by(stratum) %>% summarise(meanHe=mean(exptd.het))
+# ho <- heterozygosity(genind2gtypes(dat.genind.hiN.miss20.imiss20), type="observed", by.strata=TRUE)
+# ho2 <- ho %>% group_by(stratum) %>% summarise(meanHo=mean(obsvd.het))
+# h.df <- full_join(he2, ho2)
+```
+
+&nbsp;
+
+## Statistical difference in heterozygosity
+```{r}
+# Stat tests
+He_melt <- Het_rsc_melt %>% filter(variable == "He")
+Ho_melt <- Het_rsc_melt %>% filter(variable == "Ho")
+
+# Expected Het
+kruskal.test(He_melt$value~He_melt$group) # P=0.01029
+pairwise.wilcox.test(He_melt$value, He_melt$group,p.adjust.method = "BH") # none after BH correction
+
+# Observed Het
+kruskal.test(Ho_melt$value~Ho_melt$group) # P=0.01396
+pairwise.wilcox.test(Ho_melt$value, Ho_melt$group,p.adjust.method = "BH")
+
+```
+
+&nbsp;
+
+## Heterozygosity by sex
+```{r}
+# Sex-specific heterozygosity: males vs males, females vs females
+# Using hierfstat with basic.stats
+
+het_by_sex <- data.frame(
+  waterbody = character(),
+  Ho_F = numeric(),
+  Ho_M = numeric(),
+  He_F = numeric(),
+  He_M = numeric(),
+  sufficient_F = logical(),
+  sufficient_M = logical(),
+  stringsAsFactors = FALSE
+)
+
+cat("Calculating sex-specific heterozygosity using hierfstat...\n")
+
+# MALES heterozygosity
+cat("\n=== MALES HETEROZYGOSITY ===\n")
+male_indices <- which(dat.genind.hiN.miss20.imiss20@other$sex == "male" & 
+                      !is.na(dat.genind.hiN.miss20.imiss20@other$sex))
+
+if(length(male_indices) > 0) {
+  males_genind <- dat.genind.hiN.miss20.imiss20[male_indices]
+  male_pop_sizes <- table(pop(males_genind))
+  cat("Male sample sizes per waterbody:\n")
+  print(male_pop_sizes)
+  
+  # Only keep waterbodies with sufficient males
+  sufficient_male_pops <- names(male_pop_sizes)[male_pop_sizes >= 1]
+  cat("Waterbodies with males:\n")
+  print(sufficient_male_pops)
+  
+  if(length(sufficient_male_pops) > 0) {
+    males_genind_filtered <- males_genind[pop(males_genind) %in% sufficient_male_pops]
+    males_genind_filtered@pop <- factor(males_genind_filtered@pop)
+    
+    tryCatch({
+      # Calculate heterozygosity among males only
+      males_bs <- hierfstat::basic.stats(males_genind_filtered, diploid = TRUE)
+      male_Ho <- colMeans(males_bs$Ho, na.rm = TRUE)
+      male_He <- colMeans(males_bs$Hs, na.rm = TRUE)
+      cat("Male heterozygosity calculated successfully!\n")
+      print(data.frame(waterbody = names(male_Ho), Ho = male_Ho, He = male_He))
+    }, error = function(e) {
+      cat("Error in male heterozygosity analysis:", e$message, "\n")
+      male_Ho <- numeric(0)
+      male_He <- numeric(0)
+    })
+  } else {
+    male_Ho <- numeric(0)
+    male_He <- numeric(0)
+    cat("No waterbodies with male samples\n")
+  }
+} else {
+  male_Ho <- numeric(0)
+  male_He <- numeric(0)
+  cat("No male samples found\n")
+}
+
+# FEMALES heterozygosity
+cat("\n=== FEMALES HETEROZYGOSITY ===\n")
+female_indices <- which(dat.genind.hiN.miss20.imiss20@other$sex == "female" & 
+                        !is.na(dat.genind.hiN.miss20.imiss20@other$sex))
+
+if(length(female_indices) > 0) {
+  females_genind <- dat.genind.hiN.miss20.imiss20[female_indices]
+  female_pop_sizes <- table(pop(females_genind))
+  cat("Female sample sizes per waterbody:\n")
+  print(female_pop_sizes)
+  
+  # Only keep waterbodies with sufficient females
+  sufficient_female_pops <- names(female_pop_sizes)[female_pop_sizes >= 1]
+  cat("Waterbodies with females:\n")
+  print(sufficient_female_pops)
+  
+  if(length(sufficient_female_pops) > 0) {
+    females_genind_filtered <- females_genind[pop(females_genind) %in% sufficient_female_pops]
+    females_genind_filtered@pop <- factor(females_genind_filtered@pop)
+    
+    tryCatch({
+      # Calculate heterozygosity among females only
+      females_bs <- hierfstat::basic.stats(females_genind_filtered, diploid = TRUE)
+      female_Ho <- colMeans(females_bs$Ho, na.rm = TRUE)
+      female_He <- colMeans(females_bs$Hs, na.rm = TRUE)
+      cat("Female heterozygosity calculated successfully!\n")
+      print(data.frame(waterbody = names(female_Ho), Ho = female_Ho, He = female_He))
+    }, error = function(e) {
+      cat("Error in female heterozygosity analysis:", e$message, "\n")
+      female_Ho <- numeric(0)
+      female_He <- numeric(0)
+    })
+  } else {
+    female_Ho <- numeric(0)
+    female_He <- numeric(0)
+    cat("No waterbodies with female samples\n")
+  }
+} else {
+  female_Ho <- numeric(0)
+  female_He <- numeric(0)
+  cat("No female samples found\n")
+}
+
+# Combine results into final table
+cat("\n=== COMBINING HETEROZYGOSITY RESULTS ===\n")
+for(wb in unique(pop(dat.genind.hiN.miss20.imiss20))) {
+  ho_f <- ifelse(wb %in% names(female_Ho), female_Ho[wb], NA)
+  he_f <- ifelse(wb %in% names(female_He), female_He[wb], NA)
+  ho_m <- ifelse(wb %in% names(male_Ho), male_Ho[wb], NA)
+  he_m <- ifelse(wb %in% names(male_He), male_He[wb], NA)
+  
+  suff_f <- wb %in% sufficient_female_pops
+  suff_m <- wb %in% sufficient_male_pops
+  
+  het_by_sex <- rbind(het_by_sex, data.frame(
+    waterbody = as.character(wb),
+    Ho_F = ho_f,
+    Ho_M = ho_m,
+    He_F = he_f,
+    He_M = he_m,
+    sufficient_F = suff_f,
+    sufficient_M = suff_m
+  ))
+}
+
+# Factor reordering
+het_by_sex$waterbody <- factor(het_by_sex$waterbody, levels=c("Apt1", "Apt2", "Apt3", "WestGC1", "WestGC2", "WestGC6", "Hotel1", "Hotel2", "Hotel3", "Hotel4", "EastGC1", "EastGC7", "EastGC10","EastGC11", "EastGC13", "EastGC2", "EastGC3", "EastGC4", "Private1", "Drain1"))
+het_by_sex <- het_by_sex %>% arrange(waterbody)
+
+cat("\nSex-specific heterozygosity results:\n")
+print(het_by_sex)
+
+# Calculate differences between sexes
+het_by_sex$Ho_diff <- het_by_sex$Ho_M - het_by_sex$Ho_F
+het_by_sex$He_diff <- het_by_sex$He_M - het_by_sex$He_F
+
+# Round numeric columns
+het_by_sex <- het_by_sex %>%
+  mutate(across(c(Ho_F, He_F, Ho_M, He_M, Ho_diff, He_diff), ~ round(.x, 4)))
+
+cat("\nHeterozygosity with comparisons:\n")
+print(het_by_sex[c("waterbody", "Ho_F", "Ho_M", "He_F", "He_M", 
+                  "Ho_diff", "He_diff", "sufficient_F", "sufficient_M")])
+
+# Compare with original heterozygosity results
+comparison_het <- merge(
+  Het_rsc_df[c("waterbody", "Ho", "He")], 
+  het_by_sex[c("waterbody", "Ho_F", "Ho_M", "He_F", "He_M", "sufficient_F", "sufficient_M")], 
+  by = "waterbody", all = TRUE
+)
+
+# Only show waterbodies where we could analyze both sexes
+comparison_het_valid <- comparison_het[comparison_het$sufficient_F & comparison_het$sufficient_M & 
+                                     !is.na(comparison_het$sufficient_F) & !is.na(comparison_het$sufficient_M), ]
+
+cat("\n=== COMPARISON: Original vs Sex-specific Heterozygosity ===\n")
+print(comparison_het_valid)
+
+# Interpretation for heterozygosity
+cat("\n=== HETEROZYGOSITY INTERPRETATION ===\n")
+
+valid_het_data <- het_by_sex[het_by_sex$sufficient_F & het_by_sex$sufficient_M &
+                           !is.na(het_by_sex$Ho_F) & !is.na(het_by_sex$Ho_M), ]
+
+if(nrow(valid_het_data) > 0) {
+  cat("Waterbodies with higher male observed heterozygosity:\n")
+  male_higher_ho <- valid_het_data[valid_het_data$Ho_diff > 0.01, ]  # >1% difference
+  if(nrow(male_higher_ho) > 0) {
+    print(male_higher_ho[c("waterbody", "Ho_M", "Ho_F", "Ho_diff")])
+  } else cat("None with >1% difference\n")
+  
+  cat("\nWaterbodies with higher female observed heterozygosity:\n")
+  female_higher_ho <- valid_het_data[valid_het_data$Ho_diff < -0.01, ]  # >1% difference
+  if(nrow(female_higher_ho) > 0) {
+    print(female_higher_ho[c("waterbody", "Ho_F", "Ho_M", "Ho_diff")])
+  } else cat("None with >1% difference\n")
+  
+  cat("\nWaterbodies with higher male expected heterozygosity:\n")
+  male_higher_he <- valid_het_data[valid_het_data$He_diff > 0.01, ]  # >1% difference
+  if(nrow(male_higher_he) > 0) {
+    print(male_higher_he[c("waterbody", "He_M", "He_F", "He_diff")])
+  } else cat("None with >1% difference\n")
+  
+  cat("\nWaterbodies with higher female expected heterozygosity:\n")
+  female_higher_he <- valid_het_data[valid_het_data$He_diff < -0.01, ]  # >1% difference
+  if(nrow(female_higher_he) > 0) {
+    print(female_higher_he[c("waterbody", "He_F", "He_M", "He_diff")])
+  } else cat("None with >1% difference\n")
+  
+  cat("\n=== SUMMARY STATISTICS ===\n")
+  cat("Mean Ho - Males:", round(mean(valid_het_data$Ho_M, na.rm = TRUE), 4), "\n")
+  cat("Mean Ho - Females:", round(mean(valid_het_data$Ho_F, na.rm = TRUE), 4), "\n")
+  cat("Mean He - Males:", round(mean(valid_het_data$He_M, na.rm = TRUE), 4), "\n")
+  cat("Mean He - Females:", round(mean(valid_het_data$He_F, na.rm = TRUE), 4), "\n")
+}
+
+het.sex.df <- het_by_sex %>%
+  mutate(across(c(Ho_F, Ho_M,He_F, He_M), ~ round(.x, 3))) %>% dplyr::select(waterbody, Ho_F,  Ho_M,He_F, He_M)
+```
+
+&nbsp;
+
+# Inbreeding coefficient (Fis)
+Table 1 - Mean inbreeding coefficient per waterbody
+```{r}
+fis <- colMeans(bs$Fis, na.rm = TRUE)
+fis.m <- fis %>% melt() %>% mutate(waterbody=rownames(.)) %>% rename(fis=value)
+fis.m$waterbody <- factor(fis.m$waterbody, levels=c("Apt1", "Apt2", "Apt3", "WestGC1", "WestGC2", "WestGC6", "Hotel1", "Hotel2", "Hotel3", "Hotel4", "EastGC1", "EastGC7", "EastGC10","EastGC11", "EastGC13", "EastGC2", "EastGC3", "EastGC4", "Private1", "Drain1"))
+
+# define groups
+fis.m$group <- case_when(
+  fis.m$waterbody %in% c("Drain1") ~ "Group5",
+  fis.m$waterbody %in% c("Apt1", "Apt2", "Apt3") ~ "Group1",
+  fis.m$waterbody %in% c("WestGC1", "WestGC2", "WestGC3", "WestGC6", "Hotel5") ~ "Group2_WestGC",
+  fis.m$waterbody %in% c("Hotel1", "Hotel2", "Hotel3", "Hotel4") ~ "Group2_Hotel",
+  fis.m$waterbody %in% c("EastGC1", "EastGC11", "EastGC10", "EastGC7", "EastGC13", "EastGC9") ~ "Group3_EastGC_SW",
+  fis.m$waterbody %in% c("EastGC2", "EastGC3", "EastGC4") ~ "Group3_EastGC_NE",
+  fis.m$waterbody %in% c("Private1") ~ "Group4",
+  TRUE ~ NA_character_
+)
+
+fis.m$group <- factor(fis.m$group, levels = c("Group1", "Group2_WestGC", "Group2_Hotel", "Group3_EastGC_NE", "Group3_EastGC_SW", "Group4", "Group5"))
+
+
+
+# # alt way to calc Fis -- same method as simulations
+#   hohe <- merge(ho,he)
+#   loc_Fis <- hohe %>% dplyr::group_by(stratum) %>% dplyr::mutate(loc_Fis=1-(obsvd.het/exptd.het))
+#   FisA <- loc_Fis %>% dplyr::group_by(stratum) %>% dplyr::summarize(meanFis=mean(loc_Fis, na.rm=TRUE))
+#   Fis <- as.vector(FisA$meanFis)
+#   
+
+```
+
+&nbsp;
+
+## Statistical difference in fis - Table S5
+```{r Table S5}
+kruskal.test(fis.m$fis~fis.m$group) # P=0.5389
+
+# test if Fis is signif diff from zero
+  t.test(bs$Fis[,1])
+  
+  # for each waterbody
+fisList <- c()
+for (i in colnames(bs$Fis)){
+    print(i)
+    print(t.test(bs$Fis[,i]))
+  }
+
+# Format for Table S5
+# Create empty dataframe to store results
+fis_results <- data.frame(
+  Group = character(),
+  Waterbody = character(),
+  FIS = numeric(),
+  t = numeric(),
+  DF = numeric(),
+  P_value = numeric(),
+  stringsAsFactors = FALSE
+)
+
+# Loop through each waterbody column
+for (i in colnames(bs$Fis)) {
+  # Run t-test
+  test_result <- t.test(bs$Fis[, i])
+  
+  # Extract values
+  fis_mean <- mean(bs$Fis[, i], na.rm = TRUE)
+  t_stat <- test_result$statistic
+  df <- test_result$parameter
+  p_val <- test_result$p.value
+  
+  # Add to dataframe
+  fis_results <- rbind(fis_results, data.frame(
+    Group = NA,
+    Waterbody = i,
+    FIS = round(fis_mean, 3),
+    t = round(t_stat, 3),
+    DF = round(df, 0),
+    P_value = p_val
+  ))
+}
+
+# Assign groups
+fis_results <- fis_results %>%
+  mutate(
+    Group = case_when(
+      Waterbody %in% c("Apt1", "Apt2", "Apt3") ~ 1,
+      Waterbody %in% c("WestGC1", "WestGC2", "WestGC3", "WestGC6", 
+                       "Hotel1", "Hotel2", "Hotel3", "Hotel4", "Hotel5") ~ 2,
+      Waterbody %in% c("EastGC1", "EastGC2", "EastGC3", "EastGC4", "EastGC7", 
+                       "EastGC9", "EastGC10", "EastGC11", "EastGC13") ~ 3,
+      Waterbody %in% c("Private1") ~ 4,
+      Waterbody %in% c("Drain1") ~ 5,
+      TRUE ~ NA_real_
+    )
+  )
+
+samp.sz.m4fis <- samp.sz.m %>% rename("Waterbody"=waterbody)
+fis_results <- left_join(fis_results, samp.sz.m4fis) %>% dplyr::select(Group, Waterbody, N, everything())
+
+# Save to CSV
+write.csv(fis_results, "tables/tableS5_fis_ttest.csv", row.names = FALSE)
+
+```
+
+&nbsp;
+
+## Fis by sex -- Table S4
+```{r}
+# Sex-specific Fis (inbreeding coefficient): males vs males, females vs females
+# Using hierfstat with basic.stats
+
+# Original Fis analysis - run this first
+dat.genind.hiN.miss20.imiss20$pop <- factor(dat.genind.hiN.miss20.imiss20$pop)
+bs <- hierfstat::basic.stats(dat.genind.hiN.miss20.imiss20, diploid = TRUE) #hierfstat
+
+fis <- colMeans(bs$Fis, na.rm = TRUE)
+fis.m <- fis %>% melt() %>% mutate(waterbody=rownames(.)) %>% rename(fis=value)
+fis.m$waterbody <- factor(fis.m$waterbody, levels=c("Apt1", "Apt2", "Apt3", "WestGC1", "WestGC2", "WestGC6", "Hotel1", "Hotel2", "Hotel3", "Hotel4", "EastGC1", "EastGC7", "EastGC10","EastGC11", "EastGC13", "EastGC2", "EastGC3", "EastGC4", "Private1", "Drain1"))
+
+# Add group assignments
+fis.m$group <- case_when(
+  fis.m$waterbody %in% c("Drain1") ~ "Group5",
+  fis.m$waterbody %in% c("Apt1", "Apt2", "Apt3") ~ "Group1",
+  fis.m$waterbody %in% c("WestGC1", "WestGC2", "WestGC3", "WestGC6", "Hotel5") ~ "Group2_WestGC",
+  fis.m$waterbody %in% c("Hotel1", "Hotel2", "Hotel3", "Hotel4") ~ "Group2_Hotel",
+  fis.m$waterbody %in% c("EastGC1", "EastGC11", "EastGC10", "EastGC7", "EastGC13", "EastGC9") ~ "Group3_EastGC_SW",
+  fis.m$waterbody %in% c("EastGC2", "EastGC3", "EastGC4") ~ "Group3_EastGC_NE",
+  fis.m$waterbody %in% c("Private1") ~ "Group4",
+  TRUE ~ NA_character_
+)
+
+fis.m$group <- factor(fis.m$group, levels = c("Group1", "Group2_WestGC", "Group2_Hotel", "Group3_EastGC_NE", "Group3_EastGC_SW", "Group4", "Group5"))
+
+
+
+fis_by_sex <- data.frame(
+  waterbody = character(),
+  Fis_F = numeric(),
+  Fis_M = numeric(),
+  sufficient_F = logical(),
+  sufficient_M = logical(),
+  stringsAsFactors = FALSE
+)
+
+min_sample_size <- 3  # Minimum sample size per sex for Fis
+
+cat("Calculating sex-specific Fis using hierfstat...\n")
+cat("Minimum sample size per sex:", min_sample_size, "\n")
+
+# MALES Fis
+cat("\n=== MALES FIS ===\n")
+male_indices <- which(dat.genind.hiN.miss20.imiss20@other$sex == "male" & 
+                      !is.na(dat.genind.hiN.miss20.imiss20@other$sex))
+
+if(length(male_indices) > 0) {
+  males_genind <- dat.genind.hiN.miss20.imiss20[male_indices]
+  male_pop_sizes <- table(pop(males_genind))
+  cat("Male sample sizes per waterbody:\n")
+  print(male_pop_sizes)
+  
+  # Only keep waterbodies with sufficient males
+  sufficient_male_pops <- names(male_pop_sizes)[male_pop_sizes >= min_sample_size]
+  cat("Waterbodies with sufficient males (≥", min_sample_size, "):\n")
+  print(sufficient_male_pops)
+  
+  if(length(sufficient_male_pops) > 0) {
+    males_genind_filtered <- males_genind[pop(males_genind) %in% sufficient_male_pops]
+    males_genind_filtered@pop <- factor(males_genind_filtered@pop)
+    
+    tryCatch({
+      # Calculate Fis among males only
+      males_bs <- hierfstat::basic.stats(males_genind_filtered, diploid = TRUE)
+      male_Fis <- colMeans(males_bs$Fis, na.rm = TRUE)
+      cat("Male Fis calculated successfully!\n")
+      print(data.frame(waterbody = names(male_Fis), Fis = male_Fis))
+    }, error = function(e) {
+      cat("Error in male Fis analysis:", e$message, "\n")
+      male_Fis <- numeric(0)
+    })
+  } else {
+    male_Fis <- numeric(0)
+    cat("No waterbodies with sufficient male sample sizes\n")
+  }
+} else {
+  male_Fis <- numeric(0)
+  cat("No male samples found\n")
+}
+
+# FEMALES Fis
+cat("\n=== FEMALES FIS ===\n")
+female_indices <- which(dat.genind.hiN.miss20.imiss20@other$sex == "female" & 
+                        !is.na(dat.genind.hiN.miss20.imiss20@other$sex))
+
+if(length(female_indices) > 0) {
+  females_genind <- dat.genind.hiN.miss20.imiss20[female_indices]
+  female_pop_sizes <- table(pop(females_genind))
+  cat("Female sample sizes per waterbody:\n")
+  print(female_pop_sizes)
+  
+  # Only keep waterbodies with sufficient females
+  sufficient_female_pops <- names(female_pop_sizes)[female_pop_sizes >= min_sample_size]
+  cat("Waterbodies with sufficient females (≥", min_sample_size, "):\n")
+  print(sufficient_female_pops)
+  
+  if(length(sufficient_female_pops) > 0) {
+    females_genind_filtered <- females_genind[pop(females_genind) %in% sufficient_female_pops]
+    females_genind_filtered@pop <- factor(females_genind_filtered@pop)
+    
+    tryCatch({
+      # Calculate Fis among females only
+      females_bs <- hierfstat::basic.stats(females_genind_filtered, diploid = TRUE)
+      female_Fis <- colMeans(females_bs$Fis, na.rm = TRUE)
+      cat("Female Fis calculated successfully!\n")
+      print(data.frame(waterbody = names(female_Fis), Fis = female_Fis))
+    }, error = function(e) {
+      cat("Error in female Fis analysis:", e$message, "\n")
+      female_Fis <- numeric(0)
+    })
+  } else {
+    female_Fis <- numeric(0)
+    cat("No waterbodies with sufficient female sample sizes\n")
+  }
+} else {
+  female_Fis <- numeric(0)
+  cat("No female samples found\n")
+}
+
+# Combine results into final table
+cat("\n=== COMBINING FIS RESULTS ===\n")
+for(wb in unique(pop(dat.genind.hiN.miss20.imiss20))) {
+  fis_f <- ifelse(wb %in% names(female_Fis), female_Fis[wb], NA)
+  fis_m <- ifelse(wb %in% names(male_Fis), male_Fis[wb], NA)
+  
+  suff_f <- wb %in% sufficient_female_pops
+  suff_m <- wb %in% sufficient_male_pops
+  
+  fis_by_sex <- rbind(fis_by_sex, data.frame(
+    waterbody = as.character(wb),
+    Fis_F = fis_f,
+    Fis_M = fis_m,
+    sufficient_F = suff_f,
+    sufficient_M = suff_m
+  ))
+}
+
+# Factor reordering
+fis_by_sex$waterbody <- factor(fis_by_sex$waterbody, levels=c("Apt1", "Apt2", "Apt3", "WestGC1", "WestGC2", "WestGC6", "Hotel1", "Hotel2", "Hotel3", "Hotel4", "EastGC1", "EastGC7", "EastGC10","EastGC11", "EastGC13", "EastGC2", "EastGC3", "EastGC4", "Private1", "Drain1"))
+fis_by_sex <- fis_by_sex %>% arrange(waterbody)
+
+cat("\nSex-specific Fis results:\n")
+print(fis_by_sex)
+
+# Calculate differences between sexes
+fis_by_sex$Fis_diff <- fis_by_sex$Fis_M - fis_by_sex$Fis_F
+
+# Round numeric columns
+fis_by_sex <- fis_by_sex %>%
+  mutate(across(c(Fis_F, Fis_M, Fis_diff), ~ round(.x, 4)))
+
+cat("\nFis with comparisons:\n")
+print(fis_by_sex[c("waterbody", "Fis_F", "Fis_M", "Fis_diff", "sufficient_F", "sufficient_M")])
+
+# Compare with original Fis results
+comparison_fis <- merge(
+  fis.m[c("waterbody", "fis")], 
+  fis_by_sex[c("waterbody", "Fis_F", "Fis_M", "sufficient_F", "sufficient_M")], 
+  by = "waterbody", all = TRUE
+)
+
+# Only show waterbodies where we could analyze both sexes
+comparison_fis_valid <- comparison_fis[comparison_fis$sufficient_F & comparison_fis$sufficient_M & 
+                                     !is.na(comparison_fis$sufficient_F) & !is.na(comparison_fis$sufficient_M), ]
+
+cat("\n=== COMPARISON: Original vs Sex-specific Fis ===\n")
+print(comparison_fis_valid)
+
+# Interpretation for Fis
+cat("\n=== FIS INTERPRETATION ===\n")
+
+valid_fis_data <- fis_by_sex[fis_by_sex$sufficient_F & fis_by_sex$sufficient_M &
+                           !is.na(fis_by_sex$Fis_F) & !is.na(fis_by_sex$Fis_M), ]
+
+if(nrow(valid_fis_data) > 0) {
+  cat("Waterbodies with higher male inbreeding (Fis):\n")
+  male_higher_fis <- valid_fis_data[valid_fis_data$Fis_diff > 0.05, ]  # >5% difference
+  if(nrow(male_higher_fis) > 0) {
+    print(male_higher_fis[c("waterbody", "Fis_M", "Fis_F", "Fis_diff")])
+  } else cat("None with >5% difference\n")
+  
+  cat("\nWaterbodies with higher female inbreeding (Fis):\n")
+  female_higher_fis <- valid_fis_data[valid_fis_data$Fis_diff < -0.05, ]  # >5% difference
+  if(nrow(female_higher_fis) > 0) {
+    print(female_higher_fis[c("waterbody", "Fis_F", "Fis_M", "Fis_diff")])
+  } else cat("None with >5% difference\n")
+  
+  cat("\nWaterbodies with significant sex differences in Fis (>10% difference):\n")
+  large_fis_diff <- valid_fis_data[abs(valid_fis_data$Fis_diff) > 0.10, ]
+  if(nrow(large_fis_diff) > 0) {
+    print(large_fis_diff[c("waterbody", "Fis_F", "Fis_M", "Fis_diff")])
+  } else cat("None with >10% difference\n")
+  
+  # Test if Fis values are significantly different from zero for each sex
+  cat("\n=== TESTING FIS SIGNIFICANTLY DIFFERENT FROM ZERO ===\n")
+  
+  # Test for males
+  if(length(sufficient_male_pops) > 0) {
+    males_bs_test <- hierfstat::basic.stats(males_genind_filtered, diploid = TRUE)
+    for(pop in sufficient_male_pops) {
+      if(pop %in% colnames(males_bs_test$Fis)) {
+        fis_test <- t.test(males_bs_test$Fis[, pop])
+        cat("Males", pop, "- Fis mean:", round(fis_test$estimate, 4), 
+            "p-value:", round(fis_test$p.value, 4), 
+            ifelse(fis_test$p.value < 0.05, "(significant)", "(not significant)"), "\n")
+      }
+    }
+  }
+  
+  # Test for females
+  if(length(sufficient_female_pops) > 0) {
+    females_bs_test <- hierfstat::basic.stats(females_genind_filtered, diploid = TRUE)
+    for(pop in sufficient_female_pops) {
+      if(pop %in% colnames(females_bs_test$Fis)) {
+        fis_test <- t.test(females_bs_test$Fis[, pop])
+        cat("Females", pop, "- Fis mean:", round(fis_test$estimate, 4), 
+            "p-value:", round(fis_test$p.value, 4), 
+            ifelse(fis_test$p.value < 0.05, "(significant)", "(not significant)"), "\n")
+      }
+    }
+  }
+  
+  cat("\n=== SUMMARY STATISTICS ===\n")
+  cat("Mean Fis - Males:", round(mean(valid_fis_data$Fis_M, na.rm = TRUE), 4), "\n")
+  cat("Mean Fis - Females:", round(mean(valid_fis_data$Fis_F, na.rm = TRUE), 4), "\n")
+  cat("Waterbodies with higher male Fis:", sum(valid_fis_data$Fis_diff > 0, na.rm = TRUE), "\n")
+  cat("Waterbodies with higher female Fis:", sum(valid_fis_data$Fis_diff < 0, na.rm = TRUE), "\n")
+}
+```
+
+&nbsp;
+
+# Table 1: Combine stats together
+```{r Table 1}
+# put all per pop stats together
+stat.dfa <- full_join(samp.sz.m, priv.al.m)  
+stat.dfb <- full_join(stat.dfa, rich.al.m)
+stat.dfc <- full_join(stat.dfb, fis.m)
+stat.df <- stat.dfc %>% full_join(., Het_rsc_df) %>% dplyr::select(waterbody, N, privateAlleles, allelicRichness, fis, Ho, He)
+
+# put all per pop plots together
+cowplot::plot_grid(priv.al.p2, rich.al.p2, rsc.het.p, fis.p)
+
+# put stats in a table together
+stats.all <- merge(Het_rsc_df, merge(rich.al.m, merge(samp.sz.m, merge(priv.al.m, fis.m))))
+stats.all$waterbody <- factor(stats.all$waterbody, levels=c("Apt1", "Apt2", "Apt3", "WestGC1", "WestGC2", "WestGC3", "WestGC6", "Hotel5", "Hotel1", "Hotel2", "Hotel3", "Hotel4", "EastGC1", "EastGC7", "EastGC9", "EastGC10","EastGC11", "EastGC13", "EastGC2", "EastGC3", "EastGC4", "Private1", "Drain1"))
+stats.all <- stats.all %>% dplyr::select(waterbody, N, allelicRichness, privateAlleles, Ho,He, fis)
+
+write.csv(stats.all, file="tables/table1_genetic_diversity.csv", row.names= F, quote = F)
+
+kable(stats.all %>% arrange(waterbody), digits = 3, caption = "Intra-population stats") %>% kable_styling()
+
+```
+
+&nbsp;
+
+# Table S4: Combine sex stats together 
+```{r Table S4}
+# Combine main sex statistics into one table
+sex_stats_combined <- priv_by_sex_corrected %>%
+  select(waterbody, privateAlleles_F, privateAlleles_M) %>%
+  left_join(rich_by_sex %>% select(waterbody, allelicRichness_F, allelicRichness_M), by = "waterbody") %>%
+  left_join(het_by_sex %>% select(waterbody, Ho_F, Ho_M, He_F, He_M), by = "waterbody") %>%
+  left_join(fis_by_sex %>% select(waterbody, Fis_F, Fis_M), by = "waterbody")
+
+# Reorder waterbodies
+sex_stats_combined$waterbody <- factor(sex_stats_combined$waterbody, 
+                                      levels=c("Apt1", "Apt2", "Apt3", "WestGC1", "WestGC2", "WestGC6", 
+                                              "Hotel1", "Hotel2", "Hotel3", "Hotel4", "EastGC1", "EastGC7", 
+                                              "EastGC10","EastGC11", "EastGC13", "EastGC2", "EastGC3", "EastGC4", 
+                                              "Private1", "Drain1"))
+sex_stats_combined <- sex_stats_combined %>% arrange(waterbody)
+
+# Round numeric columns
+sex_stats_combined <- sex_stats_combined %>%
+  mutate(across(c(allelicRichness_F, allelicRichness_M, Ho_F, Ho_M, He_F, He_M, Fis_F, Fis_M), ~ round(.x, 3)))
+
+# Or with better column names for export
+colnames(sex_stats_combined) <- c("Waterbody", "Ap_F", "Ap_M", "Ar_F", "Ar_M", 
+                                 "Ho_F", "Ho_M", "He_F", "He_M", "Fis_F", "Fis_M")
+
+write.csv(sex_stats_combined, file="tables/tableS4_sex_genetic_diversity.csv", row.names= F, quote = F)
+
+
+kable(sex_stats_combined, digits = 3, caption = "Intra-population stats") %>% kable_styling()
+```
+
+&nbsp;
+
+# Nei's genetic distance (Fst)
+Pairwise genetic distance based on Nei (1987) for Figure 5
+```{r Figure 5}
+# Calculate Fst
+pairwise.fsts <- hierfstat::pairwise.neifst(hierfstat::genind2hierfstat(dat.genind.hiN.miss20.imiss20)) # ref Nei 1987 * took ~10min
+
+lab_order <- c("Apt1", "Apt2", "Apt3", "WestGC1", "WestGC2", "WestGC6", "Hotel1", "Hotel2", "Hotel3", "Hotel4", "EastGC1", "EastGC7", "EastGC10","EastGC11", "EastGC13", "EastGC2", "EastGC3", "EastGC4", "Private1", "Drain1")
+
+# Change order of rows and cols
+nei.mat <- as.matrix(pairwise.fsts)
+nei.mat1 <- nei.mat[lab_order, ]
+nei.mat2 <- nei.mat1[, lab_order]
+
+# Create a data.frame
+nei.ind <- which(upper.tri(nei.mat2), arr.ind = TRUE)
+nei.df <- data.frame(Site1 = dimnames(nei.mat2)[[2]][nei.ind[,2]],
+                    Site2 = dimnames(nei.mat2)[[1]][nei.ind[,1]],
+                    nei = nei.mat2[ nei.ind ]) 
+nei.df <- nei.df %>% mutate(across(c(nei), round, 3))
+
+#write.table(nei.df, file="output/genetic_diversity_output/pairwiseNei_anon_12-5-24.txt", col.names = T, row.names= F, quote = F)
+#nei.df <- read.delim("output/genetic_diversity_output/pairwiseNei_anon_12-5-24.txt", header = TRUE, sep = " ")
+
+nei.df <- nei.df %>% mutate(across(c(nei), round, 3))
+nei.df$Site1 = factor(nei.df$Site1, levels = unique(nei.df$Site1))
+nei.df$Site2 = factor(nei.df$Site2, levels = unique(nei.df$Site2))
+
+# Convert negative values to zero
+nei.df$nei[nei.df$nei < 0] = 0
+
+
+# Nei italic label
+nei.label = expression(italic("F")[ST])
+# Plot heatmap
+nei.p <- ggplot(data = nei.df, aes(x = Site1, y = Site2, fill = nei))+
+  geom_tile(colour = "black")+
+  geom_text(aes(label = nei), color="black", size = 5)+
+  scale_fill_gradient( low = "white", high = "darkred", na.value = "lightgray", name = nei.label)+
+  scale_x_discrete(expand = c(0,0))+
+  scale_y_discrete(expand = c(0,0), position = "right")+
+  theme(axis.text =  element_text(colour = "black", size = 10, face = "bold"),
+        axis.title = element_blank(),
+        panel.grid = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "right",
+        legend.title = element_text(size = 14, face = "bold"),
+        legend.text = element_text(size = 10)
+        )
+
+
+# Add color bars for genetic groups
+myCol <- brewer.pal(n = 10, name = 'Paired')
+
+gp = ggplotGrob(nei.p)
+nei_g1 <- grobTree(
+                  linesGrob(unit(c(.01, .085), "npc"), unit(1, "npc"), # grp1
+                            gp = gpar(col = myCol[8], lwd = 8)),
+                  linesGrob(unit(c(.1, .234), "npc"), unit(1, "npc"), # grp2_WestGC 
+                            gp = gpar(col = myCol[1], lwd = 8)),
+                  linesGrob(unit(c(.245, .42), "npc"), unit(1, "npc"), # grp2_hotelg
+                            gp = gpar(col = myCol[2], lwd = 8)),
+                  linesGrob(unit(c(.43, .651), "npc"), unit(1, "npc"), # grp3_SW
+                            gp = gpar(col = myCol[3], lwd = 8)),
+                  linesGrob(unit(c(.661, .79), "npc"), unit(1, "npc"), # grp3_NE
+                            gp = gpar(col = myCol[4], lwd = 8)),
+                  linesGrob(unit(c(.80, .84), "npc"), unit(1, "npc"), # grp4
+                            gp = gpar(col = myCol[6], lwd = 8)),
+                  linesGrob(unit(c(.851, .88), "npc"), unit(1, "npc"), # grp5
+                            gp = gpar(col = myCol[9], lwd = 8)),
+                  textGrob("Group 1",x=.028,hjust=0,
+                           gp=gpar(col="black",fontsize=12)),
+                  textGrob("2",x=.235,hjust=0,
+                           gp=gpar(col="black",fontsize=12)),
+                  textGrob("3",x=.655,hjust=0,
+                           gp=gpar(col="black",fontsize=12)),
+                  textGrob("4",x=.819,hjust=0,
+                           gp=gpar(col="black",fontsize=12)),
+                  textGrob("5",x=.865,hjust=0,
+                           gp=gpar(col="black",fontsize=12)))
+
+#Plot All Together
+all.nei.plot <- gridExtra::grid.arrange(nei.p, nei_g1,heights=c(11,0.9))
+
+
+png(file="figures/figure5_pairwiseNei.png", width = 15, height = 10, units = "in", res=600)
+  grid.draw(all.nei.plot)
+dev.off()
+
+# bootstrap Fst to get significance - using 97.5% quantile and 2.5% quantile
+# A pairwise FST value was considered significant if its confidence interval did not include zero.(Shi et al., 2022)
+boot.fst <- hierfstat::boot.ppfst(dat=hierfstat::genind2hierfstat(dat.genind.hiN.miss20.imiss20),nboot=1000,quant=c(0.05,0.95),diploid=TRUE)
+
+#saveRDS(boot.fst, file = "/output/genetic_diversity_output/bootPairwiseNei_12-11-23.RDS") 
+
+
+```
+
+&nbsp;
+
+# Mantel tests
+Linearized Fst (Nei, 1987) vs log geographic distance for Figure 6
+```{r Mantel test}
+# Grab Fsts from stats and convert to linearized Fst -- Fst/ (1-Fst)
+pairwise.fsts.lin <- pairwise.fsts/ (1-pairwise.fsts)
+
+# Load in geographic distance matrix
+readRDS("data/rsc.geodist.rds")
+
+rsc.dist.ln <- log(rsc.dist)
+
+
+# Mantel test on linearized Fst vs ln geodistance matrices
+identical(dimnames(pairwise.fsts.lin), dimnames(rsc.dist.ln))
+vegan::mantel(pairwise.fsts.lin, rsc.dist.ln) # r=0.504, p=0.003
+
+```
+
+&nbsp;
+
+## Plot Fst vs geographic distance -- all
+Figure 6A
+```{r Figure 6A}
+# convert fst matrix to dataframe
+nei.lin.mat <- as.matrix(pairwise.fsts.lin)
+nei.lin.mat1 <- nei.lin.mat[lab_order, ]
+nei.lin.mat2 <- nei.lin.mat1[, lab_order]
+# Create a data.frame
+nei.lin.ind <- which(upper.tri(nei.lin.mat2), arr.ind = TRUE)
+nei.lin.df <- data.frame(Site1 = dimnames(nei.lin.mat2)[[2]][nei.lin.ind[,2]],
+                    Site2 = dimnames(nei.lin.mat2)[[1]][nei.lin.ind[,1]],
+                    nei_lin = nei.lin.mat2[ nei.lin.ind ]) 
+
+# convert geo distnace to dataframe
+rsc.dist.ln.mat1 <- rsc.dist.ln[lab_order, ]
+rsc.dist.ln.mat2 <- rsc.dist.ln.mat1[, lab_order]
+rsc.dist.ln.ind <- which(upper.tri(rsc.dist.ln.mat2), arr.ind = TRUE)
+rsc.dist.ln.df <- data.frame(Site1 = dimnames(rsc.dist.ln.mat2)[[2]][rsc.dist.ln.ind[,2]],
+                     Site2 = dimnames(rsc.dist.ln.mat2)[[1]][rsc.dist.ln.ind[,1]],
+                     lnGeoDist = rsc.dist.ln.mat2[ rsc.dist.ln.ind ]) 
+
+
+nei.lin.rsc <- left_join(nei.lin.df, rsc.dist.ln.df)
+
+
+
+# plot linearized Fst (Nei's 1987) vs natural log geog dist
+# color plot by within group vs between
+# Make col for inter vs intra comparisons
+nei.lin.rsc$compare <- ifelse(c(nei.lin.rsc$Site1 %in% c("Apt3", "Apt2") & nei.lin.rsc$Site2 %in% c("Apt1", "Apt2", "Apt3")),"Group1","inter")
+nei.lin.rsc$compare2 <- ifelse(c(nei.lin.rsc$Site1 %in% c("Apt3", "Apt2") & nei.lin.rsc$Site2 %in% c("Apt1", "Apt2", "Apt3")),"intra","inter")
+
+nei.lin.rsc$compare[c(nei.lin.rsc$Site1 %in% c("WestGC1", "WestGC2", "WestGC6", "Hotel1", "Hotel2", "Hotel3", "Hotel4") & nei.lin.rsc$Site2 %in% c("WestGC1", "WestGC2", "WestGC6", "Hotel1", "Hotel2", "Hotel3", "Hotel4"))] <- 'Group2'
+nei.lin.rsc$compare2[c(nei.lin.rsc$Site1 %in% c("WestGC1", "WestGC2", "WestGC6", "Hotel1", "Hotel2", "Hotel3", "Hotel4") & nei.lin.rsc$Site2 %in% c("WestGC1", "WestGC2", "WestGC6", "Hotel1", "Hotel2", "Hotel3", "Hotel4"))] <- 'intra'
+
+
+nei.lin.rsc$compare[c(nei.lin.rsc$Site1 %in% c("EastGC11", "EastGC10", "EastGC7", "EastGC1", "EastGC13", "EastGC2", "EastGC3", "EastGC4") & nei.lin.rsc$Site2 %in% c("EastGC11", "EastGC10", "EastGC7", "EastGC1", "EastGC13", "EastGC2", "EastGC3", "EastGC4"))] <- 'Group3'
+nei.lin.rsc$compare2[c(nei.lin.rsc$Site1 %in% c("EastGC11", "EastGC10", "EastGC7", "EastGC1", "EastGC13", "EastGC2", "EastGC3", "EastGC4") & nei.lin.rsc$Site2 %in% c("EastGC11", "EastGC10", "EastGC7", "EastGC1", "EastGC13", "EastGC2", "EastGC3", "EastGC4"))] <- 'intra'
+
+nei.lin.rsc$compare[c(nei.lin.rsc$Site1 %in% c("Private1") & nei.lin.rsc$Site2 %in% c(unique(nei.lin.rsc$Site2)))] <- 'Group4'
+
+nei.lin.rsc$compare[c(nei.lin.rsc$Site1 %in% c("Drain1") & nei.lin.rsc$Site2 %in% c(unique(nei.lin.rsc$Site2)))] <- 'Group5'
+
+
+nei.lin.rsc$compare <- factor(nei.lin.rsc$compare, levels=c("Group1", "Group2", "Group3", "Group4", "Group5", "inter"))
+cols4mantel <- c("Group1" = myCol[8], "Group2" = myCol[1], "Group3" = myCol[3], "Group4" = myCol[6], "Group5" = myCol[9], "inter" = "gray34")
+nei.lin.rsc$compare2 <- factor(nei.lin.rsc$compare2, levels=c("intra", "inter"))
+
+
+mantel.p5 <- ggplot(nei.lin.rsc, aes(x=lnGeoDist, y=nei_lin, shape=factor(compare2))) +
+  geom_point(aes(colour = factor(compare),), size=4, alpha=0.75) +
+  scale_color_manual(values = cols4mantel) +
+  scale_shape_manual(values=c(16, 1)) +
+  xlab("ln geographic distance") + ylab(expression(italic(F[ST])/(1-italic(F[ST])))) + #"Fst/(1-Fst)"
+  geom_smooth(method = "lm", se = FALSE, aes(linetype=factor(compare2)), color="black") +
+  scale_linetype_manual(values = c("dashed","dotted")) +
+ # ggpubr::stat_regline_equation() +
+ # stat_cor(aes(label=..rr.label..), label.x=c(4.1), label.y=c(1.25, 1.2)) +
+  labs(colour="Comparison", shape="", linetype="") +
+  geom_smooth(method="lm", se=F, aes(group=1), color="gray88", linetype="solid") + # overall trendline
+  ggpubr::stat_regline_equation(aes(group=1), size=6) +
+  theme_minimal() +
+  theme(text = element_text(size = 20))
+
+
+# linear regression details
+summary(lm(nei.lin.rsc$nei_lin ~ nei.lin.rsc$lnGeoDist))
+nei.intra <- nei.lin.rsc %>% filter(compare2 == "intra")
+summary(lm(nei.intra$nei_lin ~ nei.intra$lnGeoDist))
+nei.inter <- nei.lin.rsc %>% filter(compare2 == "inter")
+summary(lm(nei.inter$nei_lin ~ nei.inter$lnGeoDist))
+
+```
+
+&nbsp;
+
+## Plot Fst vs geographic distance -- Groups 2 and 3
+Figure 6B-C
+```{r Figure 6B-C}
+mantel.list <- c()
+for (POP in c("Hotel_WestGC", "EastGC")) {
+  dfNam <- paste0(POP, ".df")
+  manNam <- paste0(POP, ".man")
+  pltNam <- paste0(POP, ".man.p")
+  regNam <- paste0(POP, ".lm")
+  
+  # Subset genind obj
+  if (POP == "Hotel_WestGC") {
+    pop.genind <- poppr::popsub(dat.genind.hiN.miss20.imiss20, sublist=c("WestGC1", "WestGC2", "WestGC6", "Hotel1", "Hotel2", "Hotel3", "Hotel4"))
+  }
+  if (POP == "EastGC") {
+    pop.genind <- poppr::popsub(dat.genind.hiN.miss20.imiss20, sublist=c("EastGC11", "EastGC2", "EastGC1", "EastGC3", "EastGC4", "EastGC10", "EastGC7", "EastGC13", "EastGC9"))
+    }
+  
+
+  # Calc Fst for sub genind (Nei's 1987)
+  pop.fsts <- hierfstat::pairwise.neifst(hierfstat::genind2hierfstat(pop.genind)) 
+  pop.fsts.lin <- pop.fsts/ (1-pop.fsts)
+ 
+  
+ # Make sub lat/long dataframe and arrange lat/long dataframe in same order as fst matrix
+  if (POP == "Hotel_WestGC"){
+    pop.latlong <- rsc.latlong %>% filter(waterbody %in% c("WestGC1", "WestGC2", "WestGC6", "Hotel1", "Hotel2", "Hotel3", "Hotel4")) %>% distinct()
+    pop.latlong$waterbody <- factor(pop.latlong$waterbody, levels = c("WestGC1", "WestGC2", "WestGC6", "Hotel1", "Hotel2", "Hotel3", "Hotel4"))
+  }
+  if (POP == "EastGC"){
+    pop.latlong <- rsc.latlong %>% filter(waterbody %in% c("EastGC11", "EastGC10", "EastGC7", "EastGC1", "EastGC13", "EastGC2", "EastGC3", "EastGC4"))
+    pop.latlong$waterbody <- factor(pop.latlong$waterbody, levels = c("EastGC11", "EastGC10", "EastGC7", "EastGC1", "EastGC13", "EastGC2", "EastGC3", "EastGC4"))
+  }
+   
+  
+  pop.latlong <- pop.latlong %>% arrange(waterbody)
+  pop.dist <- geodist::geodist(pop.latlong)
+  colnames(pop.dist) <- pop.latlong$waterbody
+  rownames(pop.dist) <- pop.latlong$waterbody
+  pop.dist.ln <- log(pop.dist)
+ 
+  
+  # Do Mantel test with Fst and geo distance matrices (make sure pops are in same order)
+  mantel.list[[manNam]] <- vegan::mantel(pop.fsts.lin, pop.dist.ln) 
+  #ade4::mantel.randtest(pop.fsts.lin, pop.dist.ln)
+
+
+  # Convert Fst matrix to dataframe for plotting
+  pop.fsts.mat <- as.matrix(pop.fsts.lin)
+  pop.fsts.mat1 <- pop.fsts.mat[levels(pop.latlong$waterbody), ]
+  pop.fsts.mat2 <- pop.fsts.mat1[, levels(pop.latlong$waterbody)]
+  # Create a data.frame
+  pop.fsts.ind <- which(upper.tri(pop.fsts.mat2), arr.ind = TRUE)
+  pop.fsts.df <- data.frame(Site1 = dimnames(pop.fsts.mat2)[[2]][pop.fsts.ind[,2]],
+                    Site2 = dimnames(pop.fsts.mat2)[[1]][pop.fsts.ind[,1]],
+                    nei_lin = pop.fsts.mat2[ pop.fsts.ind ]) 
+
+
+  # Convert geo distance matrix to dataframe for plotting
+  pop.dist.mat1 <- pop.dist.ln[levels(pop.latlong$waterbody), ]
+  pop.dist.mat2 <- pop.dist.mat1[, levels(pop.latlong$waterbody)]
+  pop.dist.ind <- which(upper.tri(pop.dist.mat2), arr.ind = TRUE)
+  pop.dist.df <- data.frame(Site1 = dimnames(pop.dist.mat2)[[2]][pop.dist.ind[,2]],
+                     Site2 = dimnames(pop.dist.mat2)[[1]][pop.dist.ind[,1]],
+                     lnGeoDist = pop.dist.mat2[ pop.dist.ind ]) 
+
+  # Combine Fst and geo distance matrices for plotting
+  pop.all.df <- left_join(pop.fsts.df, pop.dist.df) 
+  mantel.list[[dfNam]] <- pop.all.df
+  
+  # Create plot titles
+  if (POP == "Hotel_WestGC"){
+    pop.title <- "Group 2"
+  }
+   if (POP == "EastGC"){
+   pop.title <- "Group 3"
+   }
+  
+  # define point colors
+  if (POP == "Hotel_WestGC"){
+    pt.col <- cols4mantel[2]
+  }
+   if (POP == "EastGC"){
+   pt.col <- cols4mantel[3]
+   }
+
+  # Plot linearized Fst vs natural log of geo distance
+  mantel.list[[pltNam]] <- ggplot(pop.all.df, aes(x=lnGeoDist, y=nei_lin)) +
+    geom_point(shape=19, size=3, alpha=0.85, color=pt.col) +
+    xlab("ln geographic distance") + ylab("Fst/(1-Fst)") +
+    geom_smooth(method = "lm", se = FALSE, color="black") +
+    ggpubr::stat_regline_equation(label.x=4.5,size=6) +
+    theme_minimal() + ggtitle(pop.title) +
+    theme(text = element_text(size = 12))
+
+  # calculate Rousset's slope (1997)
+  
+  # linear regression details
+  mantel.list[[regNam]] <- summary(lm(pop.all.df$nei_lin ~ pop.all.df$lnGeoDist))
+  
+}
+
+```
+
+&nbsp;
+
+### Combine gen-geo panels
+Figure 6
+```{r Figure 6}
+# Put all mantel tests together
+grp.mans <- ggarrange(mantel.list$Hotel_WestGC.man.p + theme(axis.title.x = element_blank(), axis.title.y = element_blank()), 
+                     mantel.list$EastGC.man.p + theme(axis.title.x = element_blank(), axis.title.y = element_blank()), 
+                     labels = c("B", "C"))
+
+man.all.p <- ggarrange(mantel.p5 + theme(axis.title.x = element_blank(), axis.title.y = element_blank()),
+           grp.mans,
+           ncol=1, labels = c("A"))
+
+man.all.p2 <- annotate_figure(man.all.p, left = text_grob(expression(italic(F[ST])/(1-italic(F[ST]))), rot = 90, size=18), bottom = text_grob("ln geographic distance", size=18))
+
+ggsave(man.all.p2, filename="figures/figure6_mantels.png", width=11, height=8, dpi = 350, bg="white")
+
+```
+
+&nbsp;
+
+# Neighbor joining tree
+Figure S4
+```{r Figure S4}
+tree.seed <- 1234
+set.seed(tree.seed)
+
+neinan <- poppr::aboot(dat.genind.hiN, dist = "nei.dist", strata = ~pop, tree = "nj", B=1000) 
+
+popCols <- c("Apt1" = myCol[8], "Apt3" = myCol[8], "Apt2" = myCol[8], "WestGC1" = myCol[1], "WestGC2" = myCol[1], "WestGC3" = myCol[1], "WestGC6" = myCol[1], "Hotel5" = myCol[2], "Hotel1" = myCol[2], "Hotel2" = myCol[2], "Hotel3" = myCol[2], "Hotel4" = myCol[2], "EastGC11" = myCol[3],"EastGC10" = myCol[3],"EastGC7" = myCol[3], "EastGC9" = myCol[3], "EastGC1" = myCol[3], "EastGC13" = myCol[3], "EastGC2" = myCol[4], "EastGC3" = myCol[4], "EastGC4" = myCol[4], "Private1" = myCol[6], "Private2" = myCol[6], "Drain1" = myCol[9])
+
+phy.cols <-  popCols[match(neinan$tip.label, names(popCols))]
+
+png("figures/figureS4_NJtree_boot.png", width = 1850, height = 1000)
+plot.phylo(neinan, show.node.label = T, align.tip.label = T, tip.color = c(phy.cols), cex = 2, no.margin = T, font = 2)
+dev.off()
+
+set.seed(NULL)
+```

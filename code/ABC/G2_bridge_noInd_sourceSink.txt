@@ -1,0 +1,17 @@
+time.names	source	sink
+T.UNK	1	0
+T.G2A	4	1
+T.G2B	5	4
+T.G3A	2	4
+T.G3B	3	2
+T.G4	6	4
+T.G1	7	4
+T.G5	8	7
+T.UNK_1	1	1
+T.G3A_1	2	2
+T.G3B_1	3	3
+T.G2A_1	4	4
+T.G4_1	6	6
+T.G2B_1	5	5
+T.G1_1	7	7
+T.G5_1	8	8

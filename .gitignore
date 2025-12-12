@@ -1,0 +1,16 @@
+# Ignore sensitive directory and all its contents
+sensitive/
+
+# Ignore old/deprecated code
+**/code_graveyard/
+
+# Operating system files
+.DS_Store  
+
+# README htmls
+README.html
+
+# Ignore R session info
+.Rhistory
+.RData
+.Rproj.user/

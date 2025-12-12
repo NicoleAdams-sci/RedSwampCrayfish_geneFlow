@@ -1,0 +1,521 @@
+---
+title: "Red swamp crayfish landscape genetics"
+author: "Nicole Adams"
+date: '2023-09-12'
+output: html_document
+---
+
+```{r setup, include=FALSE, echo=TRUE}
+# Load necessary packages
+library(knitr)
+library(tidyverse)
+library(vcfR)
+library(hierfstat)
+library(poppr)
+#library(ResistanceGA)
+library(sp)
+library(raster)
+
+# Project root for KNIT (applies to all chunks)
+root <- normalizePath("~/Documents/crayfish_lab/RedSwampCrayfish_geneFlow", mustWork = TRUE)
+knitr::opts_knit$set(root.dir = root)
+
+# For interactive running in RStudio only
+if (interactive()) setwd(root)
+
+# Source functions to fix population names
+source("sensitive/population_name_functions.R")
+
+# Define Rmd knit options
+knitr::opts_chunk$set(
+	fig.height = 6,
+	fig.width = 8,
+	warning = FALSE, # suppress warnings
+	message = FALSE # suppress messages
+)
+
+```
+
+Landscape genetic analyses for Red Swamp Crayfish in metro Detroit, MI, USA
+
+# Install ResistanceGA
+```{r, eval=FALSE}
+devtools::install_github("wpeterman/ResistanceGA", build_vignettes = TRUE) # Download package
+
+```
+
+&nbsp;
+
+# GENETIC DISTANCE MATRIX
+```{r}
+dat.vcf <-  read.vcfR(file="data/jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.ab_1pRt_100kb.recode.vcf") 
+dat.genind <- vcfR2genind(dat.vcf, sep = "[|/]") ## Create genind object - 763 individuals; 2,675 loci
+
+# get pop names
+dat.pops <- dat.genind@tab[,1] %>%
+  names() %>%
+  as_tibble %>%
+  separate(value, into = (c("Pop", NA))) 
+
+# fix names
+dat.pops$Pop <- convert_pop_names(dat.pops$Pop)
+dat.pops <- dat.pops %>% mutate(Pop = as.factor(Pop))
+rownames(dat.genind$tab) <- gsub("FC815-212", "FC8-15-212", rownames(dat.genind$tab))
+
+
+dat.genind@pop <- dat.pops$Pop
+
+```
+
+&nbsp;
+
+## FST GROUP TWO - Hotel + WestGC
+```{r}
+# subset genind to grp2 = Hotel + WestGC 
+# don't include WestGC3 or Hotel5 bc N<5
+g2.dat.genind <- poppr::popsub(dat.genind, sublist=c("Hotel1", "Hotel2", "Hotel3", "Hotel4", "WestGC1", "WestGC2", "WestGC6"))
+
+
+g2.fsts <- hierfstat::pairwise.neifst(hierfstat::genind2hierfstat(g2.dat.genind)) # ref Nei 1987
+
+write.csv(g2.fsts, file = "output/landgen_output/fstMatrix_grp2.csv", col.names = T, row.names = T )
+
+```
+
+&nbsp;
+
+## FST GROUP THREE - EastGC
+```{r}
+# subset genind to grp3 = EastGC
+# don't include EastGC9 bc N<5
+g3.dat.genind <- poppr::popsub(dat.genind, sublist=c("EastGC11", "EastGC2", "EastGC1", "EastGC3", "EastGC4", "EastGC10", "EastGC7", "EastGC13"))
+
+
+g3.fsts <- hierfstat::pairwise.neifst(hierfstat::genind2hierfstat(g3.dat.genind)) # ref Nei 1987
+
+write.csv(g3.fsts, file = "output/landgen_output/fstMatrix_grp3.csv", col.names = T, row.names = T )
+
+```
+
+&nbsp;
+&nbsp;
+&nbsp;
+&nbsp;
+
+# RSC resistanceGA -- GROUP TWO - Hotel + WestGC
+https://petermanresearch.weebly.com/uploads/2/5/9/2/25926970/resistancega.pdf
+```{r}
+# read in fst and geographic matrix files
+g2.fst <- read.csv("output/landgen_output/fstMatrix_grp2.csv")
+g2.dist <- read.csv("data/landscape_genetics/geoMatrix_grp2.csv")
+
+# fix row and column names
+rownames(g2.fst) <- (g2.fst$X)
+rownames(g2.dist) <- g2.dist$X
+
+g2.fst <- g2.fst[,-1]
+g2.dist <- g2.dist[,-1]
+
+
+# read in sample locations and convert to SpatialPoints object
+g2.ll <- read.csv("sensitive/grp2_lat_long.csv")
+
+# need to swap columns from Lat Long to Long Lat and remove site abbrevs
+g2.ll.fix <- g2.ll[,c(2,1)]
+#g2.ll.fix <- g2.ll[,c(4,3)] # mac
+g2.ll.sp <- SpatialPoints(g2.ll.fix)
+
+
+
+# load in raster files - don't need these loaded in R to run resistanceGA, but DO need to change extension from .txt to .asc and put them all in one directory
+ g2.canopy <- raster("../data/landscape_genetics/rasterLayers_Grp2/canopy_group2.txt")
+ g2.nlcd <- raster("../data/landscape_genetics/rasterLayers_Grp2/nlcd_group2.txt")
+ #g2.roads <- raster("~/Documents/NicoleAdams/RSC/GitHub_RSClandGen/roads_group2.txt")
+ g2.roads <- raster("../data/landscape_genetics/rasterLayers_Grp2/roads_ranked_group2.asc.txt")
+ g2.hydro <- raster("../data/landscape_genetics/rasterLayers_Grp2/hydrography_group2.txt")
+ g2.sites <- raster("../data/landscape_genetics/rasterLayers_Grp2/sites_group2.txt")
+
+
+ proj4string(g2.ll.sp) <- proj4string(g2.hydro) # put spatial points in same projection as rasters
+
+## test plotting raster
+# plot(g2.canopy)
+# plot(g2.nlcd)
+# plot(g2.roads)
+# plot(g2.hydro)
+# plot(g2.sites)
+
+  
+# check for correlation bt variable rasters
+g2.stack <-  stack(g2.canopy, g2.roads, g2.hydro, g2.nlcd)
+g2.stats <- layerStats(g2.stack, "pearson") # other stats options cov=covariance, weighted.cov
+g2.cor.mat <- g2.stats$`pearson correlation coefficient` # typical cutoff is Pearson's r >0.7
+
+
+
+# Set the random number seed to reproduce the results presented
+SEED = 1234
+
+# Specify path to the Julia `bin` directory
+JULIA_HOME <- "/Applications/Julia-1.9.app/Contents/Resources/julia/bin/"
+JuliaCall::julia_setup(JULIA_HOME)
+
+
+# ASCII.dr: directory where all the ascii raster layers are
+# select.trans: A=all, default "M"
+# method: default LL, also choose from AIC, R2
+GA.inputs <- GA.prep(ASCII.dir = "../data/landscape_genetics/rasterLayers_Grp2/",  
+                  	Results.dir = "../output/landgen_output/Results_Grp2/",
+                 	seed = SEED)
+
+jl.inputs <- jl.prep(n.Pops = 7,
+                  	response = lower(g2.fst),
+                  	CS_Point.File = g2.ll.sp, # has to be a SpatialPoints object
+                  	JULIA_HOME = JULIA_HOME) # cholmod = FALSE, precision = TRUE #run if mem intensive
+                	 
+
+# Run single surface optimization for each raster (run >2 times)
+jl.ss <- SS_optim(jl.inputs = jl.inputs, GA.inputs = GA.inputs) # ran with seed=1234 in GA.prep ### RAN
+
+
+# optimize resistance surfaces for all
+jl.optim <- MS_optim(jl.inputs = jl.inputs, GA.inputs = GA.inputs) ###  RAN
+
+
+# optimize surfaces for diff combos
+stackNoNlcd <- stack(g2.canopy, g2.roads, g2.hydro)
+GA.inputs_noNlcd <- GA.prep(ASCII.dir =stackNoNlcd,  
+                  	Results.dir = "../output/landgen_output/Results_Grp2/",
+                 	seed = SEED)
+
+jl.ms_noNlcd <- MS_optim(jl.inputs = jl.inputs,
+                 	GA.inputs = GA.inputs_noNlcd) ### RAN
+
+stackNoHydro.g2 <- stack(g2.canopy, g2.roads, g2.nlcd)
+GA.inputs_noHydro.g2 <- GA.prep(ASCII.dir =stackNoHydro.g2,  
+                  	Results.dir = "../output/landgen_output/Results_Grp2/",
+                 	seed = SEED)
+
+g2.noHydro <- MS_optim(jl.inputs = jl.inputs, GA.inputs = GA.inputs_noHydro.g2) ### RAN
+
+stackNoRoads.g2 <- stack(g2.canopy, g2.hydro, g2.nlcd)
+GA.inputs_noRoads.g2 <- GA.prep(ASCII.dir =stackNoRoads.g2,  
+                  	Results.dir = "../output/landgen_output/Results_Grp2/",
+                 	seed = SEED)
+
+g2.noRoads <- MS_optim(jl.inputs = jl.inputs, GA.inputs = GA.inputs_noRoads.g2) ### RAN
+
+stackNoCanopy.g2 <- stack(g2.roads, g2.hydro, g2.nlcd)
+GA.inputs_noCanopy.g2 <- GA.prep(ASCII.dir =stackNoCanopy.g2,  
+                  	Results.dir = "../output/landgen_output/Results_Grp2/",
+                 	seed = SEED)
+
+g2.noCanopy <- MS_optim(jl.inputs = jl.inputs, GA.inputs = GA.inputs_noCanopy.g2) ### RAN
+
+
+
+# # just canopy and roads
+stackCanopyRoads <- stack(g2.canopy, g2.roads)
+GA.inputs_CanopyRoads <- GA.prep(ASCII.dir =stackCanopyRoads,  
+                  	Results.dir = "../output/landgen_output/Results_Grp2/",
+                 	seed = SEED)
+jl.ms_canopyRoads <- MS_optim(jl.inputs = jl.inputs,
+                 	GA.inputs = GA.inputs_CanopyRoads) ### RAN
+
+
+# # just canopy and hyrdro
+stackCanopyHydro <- stack(g2.canopy, g2.hydro)
+GA.inputs_canopyHydro <- GA.prep(ASCII.dir =stackCanopyHydro,  
+                  	Results.dir = "../output/landgen_output/Results_Grp2/",
+                 	seed = SEED)
+jl.ms_canopyHydro <- MS_optim(jl.inputs = jl.inputs,
+                 	GA.inputs = GA.inputs_canopyHydro) ### RAN
+
+# # just roads and hyrdro
+stackRoadsHydro <- stack(g2.roads, g2.hydro)
+GA.inputs_roadsHydro <- GA.prep(ASCII.dir =stackRoadsHydro,  
+                  	Results.dir = "../output/landgen_output/Results_Grp2/",
+                 	seed = SEED)
+jl.ms_roadsHydro <- MS_optim(jl.inputs = jl.inputs,
+                 	GA.inputs = GA.inputs_roadsHydro) ### RAN
+
+# # just nlcd and canopy
+stacknlcdCanopy.g2 <- stack(g2.nlcd, g2.canopy)
+GA.inputs_nlcdCanopy.g2 <- GA.prep(ASCII.dir =stacknlcdCanopy.g2,  
+                  	Results.dir = "../output/landgen_output/Results_Grp2/",
+                 	seed = SEED)
+g2.nlcdCanopy <- MS_optim(jl.inputs = jl.inputs, GA.inputs = GA.inputs_nlcdCanopy.g2) ### RAN
+
+# # just nlcd and hydro
+stacknlcdHydro.g2 <- stack(g2.nlcd, g2.hydro)
+GA.inputs_nlcdHydro.g2 <- GA.prep(ASCII.dir =stacknlcdHydro.g2,  
+                  	Results.dir = "../output/landgen_output/Results_Grp2/",
+                 	seed = SEED)
+g2.nlcdHydro <- MS_optim(jl.inputs = jl.inputs, GA.inputs = GA.inputs_nlcdHydro.g2) ### RAN
+
+# # just nlcd and roads
+stacknlcdRoads.g2 <- stack(g2.nlcd, g2.roads)
+GA.inputs_nlcdRoads.g2 <- GA.prep(ASCII.dir =stacknlcdRoads.g2,  
+                  	Results.dir = "../output/landgen_output/Results_Grp2/",
+                 	seed = SEED)
+g2.nlcdRoads <- MS_optim(jl.inputs = jl.inputs, GA.inputs = GA.inputs_nlcdRoads.g2) ### RAN
+
+
+
+
+# Extract relevant components from optimization outputs
+# Make a list of cost/resistance distance matrices
+mat.list <- c(jl.ss$cd, jl.optim$cd, jl.ms_noNlcd$cd, jl.ms_canopyRoads$cd, jl.ms_canopyHydro$cd, jl.ms_roadsHydro$cd)
+k <- rbind(jl.ss$k, jl.optim$k, jl.ms_noNlcd$k, jl.ms_canopyRoads$k, jl.ms_canopyHydro$k, jl.ms_roadsHydro$k )
+
+
+# Create square distance matrix for response for use with the bootstrap function
+response <- matrix(0, 7, 7)
+
+
+# Run bootstrap
+AIC.boot <- Resist.boot(mod.names = names(mat.list),
+                    	dist.mat = mat.list,
+                    	n.parameters = k[,2],
+                    	sample.prop = 0.75,
+                    	iters = 1000,
+                    	obs = 7,
+                    	genetic.mat = g2.fst)
+
+# write.table(AIC.boot, file = "../output/landgen_output/Results_Grp2/grp2_bootstrap_10-17-23.txt", col.names = T, row.names = F )
+
+
+# look at optimized values for surfaces
+Summary.table <- data.frame(round(t(jl.optim$GA.summary@solution),2))
+colnames(Summary.table)<-c("Optimized")
+
+AIC.boot.g2 <- read.table("../output/landgen_output/Results_Grp2/grp2_bootstrap_10-17-23.txt")    
+ms.grp2.asc <- raster("../output/landgen_output/Results_Grp2/canopy_group2.txt.hydrography_group2.txt.nlcd_group2.txt.roads_ranked_group2.txt.asc")
+
+
+plot(ms.grp2.asc)
+plot(g2.ll.sp, pch = 16, col="blue", add=TRUE)
+
+```
+
+&nbsp;
+
+### Plot optimum -- GROUP TWO
+```{r}
+# read in optimized surface raster
+g2.optim <- raster("../output/landgen_output/Results_Grp2/canopy_group2.txt.hydrography_group2.txt.nlcd_group2.txt.roads_ranked_group2.txt.asc")
+
+# plot optimized surface raster
+plot(g2.optim)
+plot(g2.ll.sp,  add = T, pch = 19, col = 'blue')
+
+```
+
+
+&nbsp;
+
+# RSC resistanceGA -- GROUP THREE
+```{r}
+# read in fst and geographic matrix files
+g3.fst <- read.csv("../output/landgen_output/fstMatrix_grp3.csv")
+g3.dist <- read.csv("../data/landscape_genetics/geoMatrix_grp3.csv")
+
+
+# fix row and column names
+rownames(g3.fst) <- g3.fst$X
+rownames(g3.dist) <- g3.dist$X
+
+g3.fst <- g3.fst[,-1]
+g3.dist <- g3.dist[,-1]
+
+
+# read in sample locations and convert to SpatialPoints object
+g3.ll <- read.csv("../sensitive/grp3_lat_long.csv")
+
+# need to swap columns from Lat Long to Long Lat and remove site abbrevs
+g3.ll.fix <- g3.ll %>% dplyr::select(Long, Lat)
+g3.ll.sp <- SpatialPoints(g3.ll.fix)
+
+# load in raster files - don't need these loaded in R to run resistanceGA, but DO need to change extension from .txt to .asc and put them all in one directory
+ g3.canopy <- raster("../data/landscape_genetics/rasterLayers_Grp3/canopy_group3.asc.txt")
+ g3.nlcd <- raster("../data/landscape_genetics/rasterLayers_Grp3/nlcd_group3.asc.txt")
+ g3.roads <- raster("../data/landscape_genetics/rasterLayers_Grp3/roads_ranked_group3.asc.txt")
+ g3.hydro <- raster("../data/landscape_genetics/rasterLayers_Grp3/hydrography_group3.asc.txt")
+ 
+ proj4string(g3.ll.sp) <- proj4string(g3.hydro) # put spatial points in same projection as rasters
+
+ # test plot with points 
+# plot(g3.canopy)
+# plot(g3.ll.sp, psh = 16, col="blue", add=TRUE)
+
+# check for correlation bt variable rasters
+g3.stack <-  stack(g3.canopy, g3.roads, g3.hydro, g3.nlcd)
+g3.stats <- layerStats(g3.stack, "pearson")
+g3.cor.mat <- g3.stats$`pearson correlation coefficient` # typical cutoff is Pearson's r >0.7
+
+# Set the random number seed to reproduce the results presented
+SEED = 1234
+SEED = 4321 # rep 2
+SEED = 6666 # rep 3
+
+# Specify path to the Julia `bin` directory
+JULIA_HOME <- "/Applications/Julia-1.9.app/Contents/Resources/julia/bin/"
+JuliaCall::julia_setup(JULIA_HOME)
+
+
+# ASCII.dr: directory where all the ascii raster layers are
+# select.trans: A=all, default "M"
+# method: default LL, also choose from AIC, R2
+GA.inputs_g3 <- GA.prep(ASCII.dir = "../data/landscape_genetics/rasterLayers_Grp3/",  
+                  	Results.dir = "../output/landgen_output/Results_Grp3/",
+                 	seed = SEED)
+
+jl.inputs_g3 <- jl.prep(n.Pops = 8,
+                  	response = lower(g3.fst),
+                  	CS_Point.File = g3.ll.sp, # has to be a SpatialPoints object
+                  	JULIA_HOME = JULIA_HOME) # cholmod = FALSE, precision = TRUE #run if mem intensive
+                	 
+
+# Run single surface optimization for each raster (run >2 times)
+g3.ss <- SS_optim(jl.inputs = jl.inputs_g3, GA.inputs = GA.inputs_g3) ### 
+g3.ss.rep2 <- SS_optim(jl.inputs = jl.inputs_g3, GA.inputs = GA.inputs_g3)
+g3.ss.rep3 <- SS_optim(jl.inputs = jl.inputs_g3, GA.inputs = GA.inputs_g3)
+
+# optimize resistance surfaces for all
+g3.ms <- MS_optim(jl.inputs = jl.inputs_g3, GA.inputs = GA.inputs_g3) ### 
+ 
+# optimize surfaces for diff combos
+stackNoNlcd.g3 <- stack(g3.canopy, g3.roads, g3.hydro)
+GA.inputs_noNlcd.g3 <- GA.prep(ASCII.dir =stackNoNlcd.g3,  
+                  	Results.dir = "../output/landgen_output/Results_Grp3/Results_Grp3/",
+                 	seed = SEED)
+
+g3.noNlcd <- MS_optim(jl.inputs = jl.inputs_g3, GA.inputs = GA.inputs_noNlcd.g3) ### 
+
+stackNoHydro.g3 <- stack(g3.canopy, g3.roads, g3.nlcd)
+GA.inputs_noHydro.g3 <- GA.prep(ASCII.dir =stackNoHydro.g3,  
+                  	Results.dir = "../output/landgen_output/Results_Grp3/",
+                 	seed = SEED)
+
+g3.noHydro <- MS_optim(jl.inputs = jl.inputs_g3, GA.inputs = GA.inputs_noHydro.g3) ### 
+
+stackNoRoads.g3 <- stack(g3.canopy, g3.hydro, g3.nlcd)
+GA.inputs_noRoads.g3 <- GA.prep(ASCII.dir =stackNoRoads.g3,  
+                  	Results.dir = "../output/landgen_output/Results_Grp3/",
+                 	seed = SEED)
+
+g3.noRoads <- MS_optim(jl.inputs = jl.inputs_g3, GA.inputs = GA.inputs_noRoads.g3) ### 
+
+stackNoCanopy.g3 <- stack(g3.roads, g3.hydro, g3.nlcd)
+GA.inputs_noCanopy.g3 <- GA.prep(ASCII.dir =stackNoCanopy.g3,  
+                  	Results.dir = "../output/landgen_output/Results_Grp3/",
+                 	seed = SEED)
+
+g3.noCanopy <- MS_optim(jl.inputs = jl.inputs_g3, GA.inputs = GA.inputs_noCanopy.g3) ### 
+
+# # just canopy and roads
+stackCanopyRoads.g3 <- stack(g3.canopy, g3.roads)
+GA.inputs_CanopyRoads.g3 <- GA.prep(ASCII.dir =stackCanopyRoads.g3,  
+                  	Results.dir = "../output/landgen_output/Results_Grp3/",
+                 	seed = SEED)
+g3.canopyRoads <- MS_optim(jl.inputs = jl.inputs_g3, GA.inputs = GA.inputs_CanopyRoads.g3) ### 
+
+
+# # just canopy and hyrdro
+stackCanopyHydro.g3 <- stack(g3.canopy, g3.hydro)
+GA.inputs_canopyHydro.g3 <- GA.prep(ASCII.dir =stackCanopyHydro.g3,  
+                  	Results.dir = "../output/landgen_output/Results_Grp3/",
+                 	seed = SEED)
+g3.canopyHydro <- MS_optim(jl.inputs = jl.inputs_g3, GA.inputs = GA.inputs_canopyHydro.g3) ### 
+
+# # just roads and hyrdro
+stackRoadsHydro.g3 <- stack(g3.roads, g3.hydro)
+GA.inputs_roadsHydro.g3 <- GA.prep(ASCII.dir =stackRoadsHydro.g3,  
+                  	Results.dir = "../output/landgen_output/Results_Grp3/",
+                 	seed = SEED)
+g3.roadsHydro <- MS_optim(jl.inputs = jl.inputs_g3, GA.inputs = GA.inputs_roadsHydro.g3) ### 
+
+# # just nlcd and canopy
+stacknlcdCanopy.g3 <- stack(g3.nlcd, g3.canopy)
+GA.inputs_nlcdCanopy.g3 <- GA.prep(ASCII.dir =stacknlcdCanopy.g3,  
+                  	Results.dir = "../output/landgen_output/Results_Grp3/",
+                 	seed = SEED)
+g3.nlcdCanopy <- MS_optim(jl.inputs = jl.inputs_g3, GA.inputs = GA.inputs_nlcdCanopy.g3) ### 
+
+# # just nlcd and hydro
+stacknlcdHydro.g3 <- stack(g3.nlcd, g3.hydro)
+GA.inputs_nlcdHydro.g3 <- GA.prep(ASCII.dir =stacknlcdHydro.g3,  
+                  	Results.dir = "../output/landgen_output/Results_Grp3/",
+                 	seed = SEED)
+g3.nlcdHydro <- MS_optim(jl.inputs = jl.inputs_g3, GA.inputs = GA.inputs_nlcdHydro.g3) ### 
+
+# # just nlcd and roads
+stacknlcdRoads.g3 <- stack(g3.nlcd, g3.roads)
+GA.inputs_nlcdRoads.g3 <- GA.prep(ASCII.dir =stacknlcdRoads.g3,  
+                  	Results.dir = "../output/landgen_output/Results_Grp3/",
+                 	seed = SEED)
+g3.nlcdRoads <- MS_optim(jl.inputs = jl.inputs_g3, GA.inputs = GA.inputs_nlcdRoads.g3) ### 
+
+
+# Extract relevant components from optimization outputs
+# Make a list of cost/resistance distance matrices
+mat.list.g3 <- c(g3.ss$cd, g3.ms$cd, g3.noNlcd$cd, g3.noCanopy$cd, g3.noHydro$cd, g3.noRoads$cd, g3.canopyRoads$cd, g3.canopyHydro$cd, g3.roadsHydro$cd, g3.nlcdCanopy$cd, g3.nlcdHydro$cd, g3.nlcdRoads$cd)
+k.g3 <- rbind(g3.ss$k, g3.ms$k, g3.noNlcd$k, g3.noCanopy$k, g3.noHydro$k, g3.noRoads$k, g3.canopyRoads$k, g3.canopyHydro$k, g3.roadsHydro$k, g3.nlcdCanopy$k, g3.nlcdHydro$k, g3.nlcdRoads$k)
+
+
+# Create square distance matrix for response for use with the bootstrap function
+response <- matrix(0, 8, 8)
+
+
+# Run bootstrap
+AIC.boot.g3 <- Resist.boot(mod.names = names(mat.list.g3),
+                    	dist.mat = mat.list.g3,
+                    	n.parameters = k.g3[,2],
+                    	sample.prop = 0.75,
+                    	iters = 1000,
+                    	obs = 8,
+                    	genetic.mat = g3.fst)
+
+# write.table(AIC.boot.g3, file = "../output/landgen_output/Results_Grp3/grp3_og84_bootstrap_11-28-23.txt", col.names = T, row.names = F )
+
+AIC.og.boot.g3 <- read.table("../output/landgen_output/Results_Grp3/grp3_og84_bootstrap_11-28-23.txt", header = T)
+AIC.og.boot.g3 <- AIC.og.boot.g3 %>% mutate_at(vars(starts_with("avg")), ~round(., 4))
+
+ms.og84.asc <- raster("../output/landgen_output/Results_Grp3/canopy_group3.txt.hydrography_group3.txt.nlcd_group3.txt.roads_ranked_group3.txt.asc")
+
+plot(g3.hydro)
+plot(g3.ll.sp, psh = 16, col="blue", add=TRUE)
+extract(g3.hydro, g3.ll.sp)
+
+
+plot(ms.og84.asc)
+plot(g3.og.sp, psh = 16, col="blue", add=TRUE)
+
+```
+
+&nbsp;
+&nbsp;
+
+# Plot G2 and G3 maps together -- Figure S6
+```{r figure S6}
+# read in optimized surface raster
+g2.optim <- raster("../output/landgen_output/Results_Grp2/canopy_group2.txt.hydrography_group2.txt.nlcd_group2.txt.roads_ranked_group2.txt.asc")
+ms.og84.asc <- raster("../output/landgen_output/Results_Grp3/canopy_group3.txt.hydrography_group3.txt.nlcd_group3.txt.roads_ranked_group3.txt.asc")
+
+# plot optimized surface raster
+png("../figures/figureS6_Grp2y3_msopt.png", width = 12, height = 8, units = "in", res = 1000)
+par(mfrow = c(1,2))
+plot(g2.optim)
+plot(g2.ll.sp,  add = T, pch = 19, col = 'black')
+title(main = "Group 2")
+mtext(text=LETTERS[1], xpd=NA, side=3, adj=0, font=2, line = 2, cex = 1.25)
+plot(ms.og84.asc)
+plot(g3.ll.sp,  add = T, pch = 19, col = 'black', main = "Group 3")
+title(main = "Group 3")
+mtext(text=LETTERS[2], xpd=NA, side=3, adj=0, font=2, line = 2, cex = 1.25)
+dev.off()
+
+
+
+```
+

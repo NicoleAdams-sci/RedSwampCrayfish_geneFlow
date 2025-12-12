@@ -1,0 +1,666 @@
+---
+title: "Genotyping and filtering P. clarkii sequences"
+author: "Nicole Adams"
+date: "2025-04-05"
+output: 
+  html_document:
+    toc: true
+    code_folding: show
+---
+
+```{r setup, include=FALSE, echo=TRUE}
+# Load necessary packages
+library(tidyverse)
+library(reshape2)
+library(ggrepel)
+library(viridis)
+library(RColorBrewer)
+library(ggpubr)
+#BiocManager::install("SeqArray")
+library(SeqArray)
+library(SNPRelate)
+library(vcfR)
+library(adegenet)
+
+# Define Rmd knit options
+#knitr::opts_knit$set(root.dir = "..")
+knitr::opts_chunk$set(
+	fig.height = 6,
+	fig.width = 8,
+	warning = FALSE, # suppress warnings
+	message = FALSE # suppress messages
+)
+#echo = FALSE # defaults to not showing R code, change chunk to echo=TRUE where wanted
+
+# Set eval=FALSE for all bash chunks
+knitr::opts_hooks$set(
+  engine = function(options) {
+    if (options$engine == "bash") {
+      options$eval = FALSE
+      message = FALSE
+    }
+    options
+  }
+)
+```
+
+# Genotyping RSC sequences from Homola and Adams
+For details on sequence data processing see dataProcessing_fastq2bams_Sard-Homola.Rmd and dataProcessing_fastq2bams_Adams.Rmd for steps taken prior to genotyping.<br>
+
+## Set up
+Copy filtered BAM files in one spot in scratch
+(../../scripts/cpBams2sc2.sbatch) -- edited
+```{bash}
+#!/bin/sh 
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH -t 00:45:00
+#SBATCH --cpus-per-task=2
+#SBATCH --mem-per-cpu=2G
+#SBATCH -J cpBams
+#SBATCH -o cpBams.%j.out
+#SBATCH --error cpBams.%j.err
+
+sample=$1
+
+cp "$sample" /mnt/gs21/scratch/adamsn23/RSC/jYseq2022/bams
+
+
+```
+
+&nbsp;
+
+Loop to copy files
+```{bash}
+mkdir /mnt/gs21/scratch/adamsn23/RSC/jYseq2022/bams
+
+# copy seq2022 sorted and filtered bams to tmp space in scratch
+cd /mnt/home/adamsn23/RedSwampCrayfish/seq2022/OUT/filtered
+
+for sample in ST-28-22.pe.sorted.filtered.bam; do echo $sample; sbatch ../../scripts/cpBams2sc2.sbatch $sample; done
+
+for sample in *.pe.sorted.filtered.bam; do echo $sample; sbatch ../../scripts/cpBams2sc2.sbatch $sample; done
+
+
+# copy Homola 2021 bams sorted and filtered bams to tmp space in scratch
+cd /mnt/home/adamsn23/RedSwampCrayfish/nickYjaredReanalysis/OUT/filtered
+
+for sample in *.pe.sorted.filtered.bam; do echo $sample; sbatch /mnt/home/adamsn23/RedSwampCrayfish/seq2022/scripts/cpBams2sc2.sbatch $sample; done
+```
+
+&nbsp;
+
+## Call genotypes with Stacks gstacks
+(/mnt/home/adamsn23/RedSwampCrayfish/jaredYseq2022/scripts/13_genotype_NEA3.sh) -- output in /genotyped2/
+```{bash}
+#==================================================================================================
+#   File: genotype.sh
+#   Date: 01/07/20, 03/14/2022 (NEA), 07/16/2022 (NEA)
+#   Description: Genotype using GStacks
+#--------------------------------------------------------------------------------------------------
+#       Authors: Jared Homola, Nicole Adams
+#==================================================================================================
+
+#Define alias for project root directory
+RUN_PATH=/mnt/home/adamsn23/RedSwampCrayfish/jaredYseq2022
+SCR=/mnt/gs21/scratch/adamsn23/RSC/jYseq2022/bams
+
+#mkdir $RUN_PATH/OUT/genotyped2/
+
+cd $RUN_PATH/SHELL
+
+echo '#!/bin/sh 
+#SBATCH --nodes=1-8
+#SBATCH --ntasks=1
+#SBATCH -t 48:00:00
+#SBATCH --cpus-per-task=24
+#SBATCH --mem-per-cpu=16G
+#SBATCH -J genotype
+#SBATCH -o '$RUN_PATH'/QSTAT/genotype2.%j.out
+#SBATCH --error '$RUN_PATH'/QSTAT/genotype2.%j.err
+
+module purge
+module load GCC/9.3.0 OpenMPI/4.0.3 Stacks/2.59
+
+cd '$SCR'
+gstacks -I '$SCR' \
+    -S .pe.sorted.filtered.bam \
+    --threads 24 \
+    -M '$RUN_PATH'/SHELL/dependencies/popMap_jaredYseq2022_adults_spRm_anonymous.txt \
+    -O '$RUN_PATH'/OUT/genotyped2/
+
+scontrol show job ${SLURM_JOB_ID} $' > genotype2.sh
+
+sbatch genotype2.sh
+
+
+```
+
+Genotyping output:<br>
+ 138876 loci comprising 203549990 forward reads and 194437708 matching paired-end reads; mean insert length was 312.6 (sd: 95.1). Genotyped 138876 loci:effective per-sample coverage: mean=24.1x, stdev=26.6x, min=1.1x, max=224.1x, mean number of sites per locus: 387.4
+
+&nbsp;
+
+## Create VCF with Stacks populations
+(.../RedSwampCrayfish/jaredYseq2022/scripts/14_populations_NEA2.sh)
+```{bash}
+#==================================================================================================
+#   File: 14_populations.sh
+#   Date: 01/07/20, 03/17/2022 (NEA), 07/17/2022 (NEA)
+#   Description: Run Stacks' 'Populations' to generate vcf file
+#       Authors: Jared Homola, Nicole Adams
+#==================================================================================================
+
+#Define alias for project root directory
+RUN_PATH=/mnt/home/adamsn23/RedSwampCrayfish/jaredYseq2022
+SCR=/mnt/gs21/scratch/adamsn23/RSC/jYseq2022
+
+cd $RUN_PATH/SHELL
+
+echo '#!/bin/sh 
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH -t 9:00:00
+#SBATCH --cpus-per-task=16
+#SBATCH --mem-per-cpu=8G
+#SBATCH -J populations
+#SBATCH -o '$RUN_PATH'/QSTAT/populations_jY22-2.%j.out
+
+module purge
+module load GCC/9.3.0 OpenMPI/4.0.3 Stacks/2.59
+
+
+populations -P '$RUN_PATH'/OUT/genotyped2 \
+    -O '$RUN_PATH'/OUT/genotyped2 \
+    -t 16 \
+    -M '$RUN_PATH'/SHELL/dependencies/popMap_jaredYseq2022_adults_spRm2_anonymous.txt \
+    --vcf \
+    --fasta-loci \
+    --ordered-export
+
+scontrol show job ${SLURM_JOB_ID} $' > populations_jY22-2.sh
+
+sbatch populations_jY22-2.sh
+
+```
+
+Creating VCF output:<br>
+Removed 0 loci that did not pass sample/population constraints from 138876 loci.
+Kept 138876 loci, composed of 58254344 sites; 103 of those sites were filtered, 521238 variant sites remained. 53797248 genomic sites, of which 3113362 were covered by multiple loci (5.8%).
+Mean genotyped sites per locus: 387.15bp (stderr 0.51).
+
+&nbsp;
+
+## Filter VCF
+```{bash}
+# /mnt/home/adamsn23/RedSwampCrayfish/jaredYseq2022/OUT/genotyped2/populations.snps.vcf
+# starting w 1255 samples, SNPs=138876
+
+module load GCC/7.3.0-2.30 OpenMPI/3.1.1 VCFtools/0.1.15-Perl-5.28.0 BCFtools
+
+# 1) Base filter - genotype level (--minGQ 20 --max-missing 0.01 --min-meanDP 2)
+vcftools --vcf populations.snps.vcf --minGQ 20 --max-missing 0.01 --min-meanDP 2 --recode --recode-INFO-all --out jy22_adults_baseFilter
+
+#  kept 1255 out of 1255 Individuals, kept 102491 out of a possible 516686 Sites
+
+# 2) 2nd round of filtering: rm individuals with >99% missing data
+vcftools --vcf jy22_adults_baseFilter.recode.vcf --missing-indv --out jy22_adults_baseFilter
+
+cat jy22_adults_baseFilter.imiss | awk '$5 < 0.99' | awk '{print $1}' > jy22_adults_baseFilter.imiss99.list 
+
+vcftools --vcf jy22_adults_baseFilter.recode.vcf --keep jy22_adults_baseFilter.imiss99.list --recode --recode-INFO-all --out jy22_adults_baseFilter_imiss99  
+
+# kept 1249 out of 1255 Individuals, kept 102491 out of a possible 102491 Sites
+
+```
+
+&nbsp;
+
+### Iterative filtering VCF
+(/mnt/home/adamsn23/RedSwampCrayfish/jaredYseq2022/scripts/iterativeFilterSNPs2.sh)
+```{bash}
+#!/bin/sh 
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH -t 8:00:00
+#SBATCH --cpus-per-task=1
+##SBATCH --mem-per-cpu=8G
+#SBATCH -J filter.snps
+#SBATCH -o /mnt/home/adamsn23/RedSwampCrayfish/jaredYseq2022/QSTAT/ifilterSNPs.%j.out
+#SBATCH --error /mnt/home/adamsn23/RedSwampCrayfish/jaredYseq2022/QSTAT/ifilterSNPs.%j.err
+
+
+
+################ SNP filtering for pop gen analyses ################
+cd /mnt/home/adamsn23/RedSwampCrayfish/jaredYseq2022/OUT/genotyped2
+module load GCC/7.3.0-2.30 OpenMPI/3.1.1 VCFtools/0.1.15-Perl-5.28.0
+
+rounds=20
+maxmissing_val=0.0375
+missingIndv_val=0.975
+#maxmissing_val=0.4125
+#missingIndv_val=0.725
+#maxmissing_val=0.7125
+#missingIndv_val=0.525
+
+#cp jy22_adults_baseFilter_imiss99.recode.vcf filteredSNPs.vcf
+
+currentRound=1
+until [ $currentRound -gt $rounds ]
+do
+    echo Round: $currentRound maxmissing_val: $maxmissing_val missindIndv_val: $missingIndv_val
+
+    vcftools --vcf filteredSNPs.vcf --minDP 7 --minGQ 20 --mac 3 --max-missing $maxmissing_val --recode --recode-INFO-all --stdout > filteredSNPs.TMP1.vcf
+   
+    vcftools --vcf filteredSNPs.TMP1.vcf --missing-indv --out filteredSNPs.TMP1
+   
+    cat filteredSNPs.TMP1.imiss | awk '$5 < '$missingIndv_val'' | awk '{print $1}' > filteredSNPs.TMP1_good_individuals.list
+ 
+ vcftools --vcf filteredSNPs.TMP1.vcf --keep filteredSNPs.TMP1_good_individuals.list --recode --recode-INFO-all --stdout > filteredSNPs.TMP2.vcf
+    
+    cp filteredSNPs.TMP2.vcf filteredSNPs.$currentRound\.vcf
+    mv filteredSNPs.TMP2.vcf filteredSNPs.vcf
+
+    
+    echo Round: $currentRound maxmissing_val: $maxmissing_val missindIndv_val: $missingIndv_val >> ifilterResults.txt
+
+ less -S filteredSNPs.TMP1_good_individuals.list | wc -l >> ifilterResults.txt
+    grep -v "#" filteredSNPs.vcf | wc -l >> ifilterResults.txt    
+
+    missingIndv_val=$(echo "($missingIndv_val - 0.025)" | bc -l)
+    maxmissing_val=$(echo "($maxmissing_val + 0.0375)" | bc -l)
+    ((currentRound++))
+
+
+done
+
+```
+
+&nbsp;
+
+Get sample sizes for each iterative filtering step
+```{bash}
+module load BCFtools
+
+for FILE in filteredSNPs.[0-9]*.vcf; do
+bcftools query -l $FILE > ${FILE%.*}.samps.txt;
+done
+
+```
+
+&nbsp;
+
+#### Look at iterative filtering results - Figure S1
+```{r Figure S1}
+rounds <- c(1:20)
+max.miss <- seq(0.0375, 0.75, by=0.0375) #0.9375 for 25 rounds
+miss.indiv <- seq(0.975, 0.500, by=-0.025) # 0.375 for 25 rounds
+individuals <- c(1052, 962, 901, 858, 830, 811, 801, 794, 782, 771, 766, 763, 760, 758, 756, 756, 755, 755, 755, 755)
+sites <- c(47357, 47309, 47036, 45296, 42415, 39680, 37201, 34872, 32746, 30795, 28949, 27054, 25156, 23310, 21425, 19623, 17864, 16165, 14472, 12774)
+
+it.filt <- as.data.frame(cbind( max.miss, miss.indiv, individuals, sites))
+
+it.filt.l <- it.filt %>% pivot_longer(!c(max.miss, miss.indiv), names_to = "resultType", values_to = "count")
+
+max.miss.p <- ggplot(it.filt.l %>% filter(count >0), aes(x=max.miss, y=count)) +
+  geom_point(show.legend = F, size=4, color="gray") +
+  facet_wrap(~resultType, scales = "free_y") +
+  #geom_vline(xintercept = max.miss[5], linetype="dashed", color="orange") +
+  #geom_vline(xintercept = max.miss[9], linetype="dashed", color="purple") +
+  geom_vline(xintercept =  max.miss[12], linetype="dashed", color="black", size=1.5) +
+  xlab("maximum missing") +
+  theme_minimal() +
+    theme(text = element_text(size = 20))
+
+miss.indiv.p <- ggplot(it.filt.l %>% filter(count >0), aes(x=miss.indiv, y=count)) +
+  geom_point(show.legend = F, size=4, color="gray") +
+  scale_x_reverse() +
+  facet_wrap(~resultType, scales = "free_y") +
+  #geom_vline(xintercept = miss.indiv[5], linetype="dashed", color="orange") +
+  #geom_vline(xintercept =  miss.indiv[9], linetype="dashed", color="purple") +
+  geom_vline(xintercept =  miss.indiv[12], linetype="dashed", color="black", size=1.5) +
+  xlab("individual missingness") +
+  theme_minimal() +
+  theme(text = element_text(size = 20), strip.text.x = element_blank()) 
+
+ifilt.p <- cowplot::plot_grid(max.miss.p, miss.indiv.p, ncol = 1, labels = "AUTO", label_size = 20)  
+
+#ggsave(ifilt.p, filename = "~/Documents/crayfish_lab/jaredYseq22_take2/iterativeFiltering_10-15-23.png", width = 13, height = 9, units = "in")
+
+
+ifilt.p
+```
+
+&nbsp;
+
+Use the filtering where it plateaus around missing indiv 70%, which would be round 12. Round 12 has missing indiv=0.7 and max missing = 0.45 (which is >55% missing data), which resulted in 763 indivs and 27054 sites. **Go forward with iterative filtering round 12 VCF**<br>
+
+&nbsp;
+
+### Filter VCF based on excess heterozygosity
+Step 1:
+```{bash}
+
+cp filteredSNPs.12.vcf jy22_adults_baseFilter_imiss99_miss45.imiss70.vcf
+
+
+#Take vcf and Remove SNPs with observed heterozygosity > 0.6 * 
+# 5.1) calc hwe 
+vcftools --vcf jy22_adults_baseFilter_imiss99_miss45.imiss70.vcf --hardy --out jy22_adults_baseFilter_imiss99_miss45.imiss70.h 
+
+# 5.2) 
+cat jy22_adults_baseFilter_imiss99_miss45.imiss70.h.hwe | grep -v CHR | awk -F"/" '{print $1" "$2" "$3}' | awk '{print $1" "$2" "$3" "$4" "$5}' | awk '{print $1" "$2" "$3" "$4" "$5" "$4/($3+$4+$5)}' > jy22_adults_baseFilter_imiss99_miss45.imiss70_ohz.txt 
+
+# 5.3)
+cat jy22_adults_baseFilter_imiss99_miss45.imiss70.h.hwe | grep -v CHR | awk '{print $1 " "$2" "$5 " "$6 " "$7}' > jy22_adults_baseFilter_imiss99_miss45.imiss70_hwepval 
+
+# 5.4)
+grep -v "^##" jy22_adults_baseFilter_imiss99_miss45.imiss70.vcf | cut -f1-3 > jy22_adults_baseFilter_imiss99_miss45.imiss70_snpIDs 
+```
+
+&nbsp;
+
+Step 2: 
+```{r}
+# scp files to laptop
+dat <- read.table("~/Documents/crayfish_lab/jaredYseq22_take2/jy22_adults_baseFilter_imiss99_miss45.imiss70_hwepval", header=FALSE)
+dat.ohz <- read.table("~/Documents/crayfish_lab/jaredYseq22_take2/jy22_adults_baseFilter_imiss99_miss45.imiss70_ohz.txt", header=FALSE)
+
+dat.SNPids <- read.delim("~/Documents/crayfish_lab/jaredYseq22_take2/jy22_adults_baseFilter_imiss99_miss45.imiss70_snpIDs", header=TRUE)
+names(dat.SNPids) <- c("CHROM", "POS", "SNPid")
+names(dat.ohz) <- c("CHROM", "POS","AA", "AB", "BB", "Ho")
+dat.ohz.df <- left_join(dat.ohz, dat.SNPids)
+
+hist(dat$V5)
+hist(dat$V4)
+hist(dat.ohz$Ho)
+
+filtered.ohz <- subset(dat.ohz.df, AB >= 1 & Ho <= 0.6)
+
+bed_filtered.ohz <- data.frame(CHR = filtered.ohz$CHR, START = filtered.ohz$POS-1, END = filtered.ohz$POS)
+
+snpIDs.filtered.ohz <- data.frame(snp = filtered.ohz$SNPid)
+
+#write.table(snpIDs.filtered.ohz, "~/Documents/crayfish_lab/jaredYseq22_take2/jy22_adults_baseFilter_imiss99_miss45.imiss70_snpIDs.filtered.ohz", sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
+
+#write.table(bed_filtered.ohz, "~/Documents/crayfish_lab/jaredYseq22_take2/jy22_adults_baseFilter_imiss99_miss45.imiss70_bed_filtered.ohz", sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
+
+# scp new files to cluster
+```
+
+&nbsp;
+
+Step 3:
+```{bash}
+vcftools --vcf jy22_adults_baseFilter_imiss99_miss45.imiss70.vcf --snps jy22_adults_baseFilter_imiss99_miss45.imiss70_snpIDs.filtered.ohz --recode --recode-INFO-all --out jy22_adults_baseFilter_imiss99_miss45.imiss70_hz
+
+# kept 763 out of 763 Individuals, kept 26778 out of a possible 27054 Sites
+
+```
+
+&nbsp;
+
+### Remove SNPs with allele balance values >0.6 or <0.4 from VCF
+Step 1:
+```{r}
+#### Filter based on allele balance ####
+
+vcf_file <- "~/Documents/crayfish_lab/jaredYseq22_take2/jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.recode.vcf"
+seqVCF2GDS(vcf.fn = vcf_file, "~/Documents/crayfish_lab/jaredYseq22_take2/jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.gds", verbose = FALSE)
+open_GDS <- seqOpen("~/Documents/crayfish_lab/jaredYseq22_take2/jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.gds", readonly = TRUE)
+
+# - Get sample info
+sample_info <- as.data.frame(read.gdsn(index.gdsn(open_GDS, "sample.id")), quote=FALSE)
+
+# data prep
+dat <- read.vcfR("~/Documents/crayfish_lab/jaredYseq22_take2/jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.recode.vcf")
+tidyDat <- vcfR2tidy(dat)
+
+tmp <- tidyDat$gt %>%  select(ChromKey, POS, Indiv, gt_GT)
+
+tmp2 <- tidyDat$fix %>% select(ChromKey, CHROM, POS, ID)
+
+positionFilter <- left_join(tmp, tmp2, by = c("ChromKey", "POS")) %>%
+ mutate(population = substr(Indiv, 1, 5)) %>%
+ select(CHROM, POS, ID) %>%
+ distinct(ID, .keep_all = TRUE) %>%
+ separate(ID, c("tag", "position", NA)) %>%
+ mutate(position = as.numeric(position))
+
+
+
+# Get allele balance
+geno_matrix.012 <-snpgdsGetGeno(open_GDS)
+het_matrix <- geno_matrix.012
+het_matrix[which(geno_matrix.012 != 1)] <- 0
+het_matrix[which(is.na(geno_matrix.012))] <- 0
+is.odd <- function(x) x %% 2 != 0
+AD <- seqGetData(open_GDS, "annotation/format/AD")
+AD <- as.data.frame(AD$data)
+ref_c <- AD[,is.odd(seq(1, ncol(AD), 1))]
+alt_c <- AD[,!is.odd(seq(1, ncol(AD), 1))]
+reads <- ref_c + alt_c
+ab1 <- (alt_c/reads)*het_matrix
+ab <- colSums(ab1, na.rm = T)/ colSums(het_matrix)
+hist(ab)
+
+# Make a list of markers that pass
+as_tibble(ab) %>% 
+  mutate(AB = ab) %>%
+  bind_cols(positionFilter) %>%  ### From SNP count filtering above
+  filter(AB > 0.4, 
+         AB < 0.6) %>% #position < 141
+  drop_na() %>% 
+  select(CHROM, POS) %>% 
+  write.table("~/Documents/crayfish_lab/jaredYseq22_take2/jy22_adults_baseFilter_imiss99_miss45.imiss70_hz_abFilterPass.txt",
+              quote = FALSE,
+              row.names = FALSE,
+              col.names = FALSE)
+  
+```
+
+&nbsp;
+
+Step 2:
+```{bash}
+vcftools --vcf jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.recode.vcf --positions jy22_adults_baseFilter_imiss99_miss45.imiss70_hz_abFilterPass.txt --recode --recode-INFO-all --out jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.ab
+
+# kept 763 out of 763 Individuals,  kept 21859 out of a possible 26778 Sites
+
+```
+
+&nbsp;
+
+### Filter VCF to 1 SNP per RAD Tag (based on missingness)
+```{r}
+bfs <- read.vcfR("~/Documents/crayfish_lab/jaredYseq22_take2/jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.ab.recode.vcf") 
+
+# calc maf
+  bfs.mafA <- as.data.frame(maf(bfs))
+  bfs.maf <- bfs.mafA %>% mutate(tag=rownames(bfs.mafA)) %>% separate(tag, into = c("tag", "position", "stuff"), sep = ":") %>% select(-stuff) %>% rename("maf.frq" =Frequency) %>% mutate(position = as.numeric(position)) %>% mutate(tag = as.numeric(tag))
+
+  
+# calc missingness per variant
+  dp <- extract.gt(bfs, element = "DP", as.numeric=TRUE)
+  myMiss <- apply(dp, MARGIN = 1, function(x){ sum(is.na(x)) })
+  myMiss <- myMiss/ncol(bfs@gt[,-1])
+  myMiss.df <- as.data.frame(cbind(names(myMiss), myMiss))
+  bfs.miss <- myMiss.df %>% separate(V1, into = c("tag", "position", "stuff"), sep = ":") %>% select(-stuff) %>% rename("missingness" =myMiss) %>% mutate(position = as.numeric(position)) %>% mutate(tag = as.numeric(tag))
+  
+  
+  # data prep
+  tidyBFs <- vcfR2tidy(bfs)
+
+  tmpBF <- tidyBFs$gt %>% select(ChromKey, POS, Indiv, gt_GT)
+
+  tmpBF2 <- tidyBFs$fix %>% select(ChromKey, CHROM, POS, ID)
+
+  positionFilter <- left_join(tmpBF, tmpBF2, by = c("ChromKey", "POS")) %>%
+   mutate(population = substr(Indiv, 1, 5)) %>%
+   select(CHROM, POS, ID) %>%
+   distinct(ID, .keep_all = TRUE) %>%
+   separate(ID, c("tag", "position", NA)) %>%
+   mutate(position = as.numeric(position)) %>%
+   mutate(tag = as.numeric(tag))
+  
+  
+  bfs.all <- full_join(bfs.maf, bfs.miss, by=c("tag", "position")) %>% select(-c(nAllele, "NA", Count))
+  positionFilter2 <- left_join(positionFilter, bfs.all, by=c("tag", "position")) %>% mutate(missingness = as.numeric(missingness))
+  
+  
+  # Make a list of markers that pass
+  positionFilter3 <- positionFilter2 %>% group_by(tag) %>%
+  filter(missingness == min(missingness)) %>% 
+  # filter(maf.frq == max(maf.frq)) %>%
+   filter(1:n() == 1)  %>%  # take first occurrence 
+   select(CHROM, POS) # adds tag bc group, could use ungroup or just select col 2 and 3
+
+  ### filter by rad tag/snp distance
+markergap = matrix(data = NA, nrow = nrow(positionFilter3)-1, ncol = 3)
+  for(x in 1:nrow(markergap)) {
+  markergap[x,1] <- paste0(positionFilter3$CHROM[x],"-",positionFilter3$POS[x])
+  markergap[x,2] <- paste0(positionFilter3$CHROM[x+1],"-",positionFilter3$POS[x+1])
+  if(positionFilter3$CHROM[x] == positionFilter3$CHROM[x+1]) {
+  markergap[x,3] <- positionFilter3$POS[x+1]-positionFilter3$POS[x]
+  } else {
+  markergap[x,3] <- NA
+  }
+}
+
+markergap <- as.data.frame(markergap)
+colnames(markergap) <- c("marker1", "marker2", "bp.gap")
+markergap$bp.gap <- as.numeric(markergap$bp.gap)
+min(markergap$bp.gap, na.rm = TRUE)
+mean(markergap$bp.gap, na.rm = TRUE)
+sum(markergap$bp.gap < 500000, na.rm = TRUE)
+
+  
+  
+  
+# write.table(positionFilter3[,2:3], file = "~/Documents/crayfish_lab/jaredYseq22_take2/jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.ab_1pRt.txt", quote = FALSE, row.names = FALSE, col.names = FALSE, sep = '\t')
+  
+```
+
+&nbsp;
+
+Filter vcf for 1 SNP per RAD Tag
+```{bash}
+# filter for 1 SNP per RAD tag and 
+
+module load GCC/7.3.0-2.30 OpenMPI/3.1.1 VCFtools/0.1.15-Perl-5.28.0 BCFtools
+
+vcftools --vcf jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.ab.recode.vcf --positions jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.ab_1pRt.txt --recode --recode-INFO-all --out jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.ab_1pRt
+
+# kept 763 out of 763 Individuals, kept 3497 out of a possible 21859 Sites
+
+```
+
+&nbsp;
+
+### Filter VCF based on distance after getting 1 SNP per RAD tag
+```{r}
+bfsx <- read.vcfR("~/Documents/crayfish_lab/jaredYseq22_take2/jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.ab_1pRt.recode.vcf") # after 1 snp per RADtag
+
+
+# calc missingness per variant
+  dpx <- extract.gt(bfsx, element = "DP", as.numeric=TRUE)
+  myMissx <- apply(dpx, MARGIN = 1, function(x){ sum(is.na(x)) })
+  myMissx <- myMissx/ncol(bfsx@gt[,-1])
+  myMiss.dfx <- as.data.frame(cbind(names(myMissx), myMissx))
+  bfs.missx <- myMiss.dfx %>% separate(V1, into = c("tag", "position", "stuff"), sep = ":") %>% select(-stuff) %>% rename("missingness" =myMissx) %>% mutate(position = as.numeric(position)) %>% mutate(tag = as.numeric(tag))
+  
+
+  # data prep
+  tidyBFsx <- vcfR2tidy(bfsx)
+
+  tmpBFx <- tidyBFsx$gt %>% select(ChromKey, POS, Indiv, gt_GT)
+
+  tmpBF2x <- tidyBFsx$fix %>% select(ChromKey, CHROM, POS, ID)
+
+  positionFilterx <- left_join(tmpBFx, tmpBF2x, by = c("ChromKey", "POS")) %>%
+   mutate(population = substr(Indiv, 1, 5)) %>%
+   select(CHROM, POS, ID) %>%
+   distinct(ID, .keep_all = TRUE) %>%
+   separate(ID, c("tag", "position", NA)) %>%
+   mutate(position = as.numeric(position)) %>%
+   mutate(tag = as.numeric(tag))
+
+  
+  positionFilter2x <- left_join(positionFilterx, bfs.missx, by=c("tag", "position")) %>% mutate(missingness = as.numeric(missingness))
+    
+  
+  
+ ### filter by distance w/in a chr
+
+taggap.list <- c()
+for (X in unique(positionFilter2x$CHROM)) {
+  chr.df <- positionFilter2x %>% filter(CHROM == X) %>% mutate(marker=paste0(CHROM, "-", POS))
+  pairs.mat <- outer(chr.df$POS,chr.df$POS, `-`)
+  pairs.mat[upper.tri(pairs.mat)] <- NA 
+  diag(pairs.mat) <- NA 
+  rownames(pairs.mat) <- paste0(chr.df$CHROM, "-", chr.df$POS)
+  colnames(pairs.mat) <- paste0(chr.df$CHROM, "-", chr.df$POS)
+ pairs.df <- as.data.frame(as.table(t(pairs.mat)))
+ pairs.df <- na.omit(pairs.df)
+ pairs.df2 <- pairs.df %>% filter(Freq < 100000)  
+ 
+ sites2keep.df <- chr.df %>% filter(!marker %in% pairs.df2$Var1)
+ 
+ taggap.list[[X]] <- sites2keep.df
+}
+ 
+ positionFilter3x <- do.call("rbind", taggap.list) # 2675 sites
+
+ 
+# write.table(positionFilter3x[,1:2], file = "~/Documents/crayfish_lab/jaredYseq22_take2/jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.ab_1pRt_100kb.txt", quote = FALSE, row.names = FALSE, col.names = FALSE, sep = '\t') 
+
+ 
+ # test to see if still have any within 100kb
+ taggap.list2 <- c()
+for (X in unique(positionFilter3x$CHROM)) {
+  chr.df <- positionFilter3x %>% filter(CHROM == X) %>% mutate(marker=paste0(CHROM, "-", POS))
+  pairs.mat <- outer(chr.df$POS,chr.df$POS, `-`)
+  pairs.mat[upper.tri(pairs.mat)] <- NA 
+  diag(pairs.mat) <- NA 
+  rownames(pairs.mat) <- paste0(chr.df$CHROM, "-", chr.df$POS)
+  colnames(pairs.mat) <- paste0(chr.df$CHROM, "-", chr.df$POS)
+ pairs.df <- as.data.frame(as.table(t(pairs.mat)))
+ pairs.df <- na.omit(pairs.df)
+ pairs.df2 <- pairs.df %>% filter(Freq < 100000)  
+ 
+ sites2keep.df <- chr.df %>% filter(!marker %in% pairs.df2$Var1)
+ 
+ taggap.list2[[X]] <- sites2keep.df
+}
+ 
+ positionFilter4x <- do.call("rbind", taggap.list2)
+ 
+
+ 
+ ## look for reseq indiv
+  bf.ids <- as.data.frame(unique(tidyBFsx$gt$Indiv))
+  bf.ids$`unique(tidyBFsx$gt$Indiv)` <- gsub("FC815-212","FC8-15-212", bf.ids$`unique(tidyBFsx$gt$Indiv)`)
+  bf.ids <- bf.ids %>% mutate(ID=`unique(tidyBFsx$gt$Indiv)`) %>% separate(`unique(tidyBFsx$gt$Indiv)`, into = c("POP", "sample"))
+  bf.ids$POP <- gsub("FC17B","FC17b", bf.ids$POP)
+ 
+ reseq <-  bf.ids$ID[str_detect(bf.ids$ID, "212$")]
+reseq2 <- unlist(strsplit(reseq, 212))
+reseq3 <- paste(reseq2,collapse = '|')
+
+bf.ids %>% filter(str_detect(ID, reseq3))
+
+
+## I found no instances of duplicate samples (POP-##, POP-##-212)
+
+```
+
+&nbsp;
+
+```{bash}
+# filter sites > 100kb away 
+
+vcftools --vcf jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.ab_1pRt.recode.vcf --positions jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.ab_1pRt_100kb.txt --recode --recode-INFO-all --out jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.ab_1pRt_100kb
+
+# kept 763 out of 763 Individuals, kept 2675 out of a possible 3497 Sites
+
+```

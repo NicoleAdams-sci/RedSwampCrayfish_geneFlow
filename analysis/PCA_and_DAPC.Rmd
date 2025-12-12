@@ -1,0 +1,616 @@
+---
+title: "PCA and DAPC analyses"
+author: "Nicole Adams"
+date: "2025-04-05"
+output: 
+  html_document:
+    toc: true
+    code_folding: show
+---
+
+```{r setup, include=FALSE, echo=TRUE}
+# Load necessary packages
+library(tidyverse)
+library(reshape2)
+library(ggrepel)
+library(viridis)
+library(RColorBrewer)
+library(ggpubr)
+#BiocManager::install("SeqArray")
+library(SeqArray)
+library(SNPRelate)
+library(vcfR)
+library(adegenet)
+
+# Set working directory
+knitr::opts_knit$set(root.dir = "~/Documents/crayfish_lab/RedSwampCrayfish_geneFlow/")
+
+# Define Rmd knit options
+#knitr::opts_knit$set(root.dir = "..")
+knitr::opts_chunk$set(
+	fig.height = 6,
+	fig.width = 8,
+	warning = FALSE, # suppress warnings
+	message = FALSE # suppress messages
+)
+#echo = FALSE # defaults to not showing R code, change chunk to echo=TRUE where wanted
+
+# Set eval=FALSE for all bash chunks
+knitr::opts_hooks$set(
+  engine = function(options) {
+    if (options$engine == "bash") {
+      options$eval = FALSE
+      message = FALSE
+    }
+    options
+  }
+)
+```
+
+```{r setup, include=FALSE, echo=TRUE}
+# Source functions to fix population names
+source("sensitive/population_name_functions.R")
+```
+
+
+# Conduct PCA and DAPC analyses on RSC samples
+Code to conduct PCA and DAPC analyses on RSC samples sequenced by Homola and Adams. For previous data processing and genotyping steps see dataProcessing_fastq2bams and genotyping_filtering files.<br>
+
+# Run PCA in PLINK
+```{bash}
+module load PLINK/2.00a_10.2-x86_64
+
+mkdir plinkAnalyses
+ 
+# generate plink files 
+plink2 --vcf jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.ab_1pRt_100kb.recode.vcf --make-bed --allow-extra-chr --out plinkAnalyses/jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.ab_1pRt_100kb
+
+cd plinkAnalyses
+
+# generate eigen values
+plink2 --bfile jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.ab_1pRt_100kb --pca --allow-extra-chr --out jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.ab_1pRt_100kb.pca
+
+
+# output: file.eigenvec and file.eigenval. The eigenval tells you in order of each PC ( so PC1,PC2….) the percentage each eigenvalue contributes to the variance. The eigenvec contains the coordinates for each sample. This file has no headers, and is tab seperated and contains the sample name in columns one and two, and then subsequently the eigenvals for each PC. 
+```
+
+&nbsp;
+
+plot PCA
+```{r plot PCA}
+pca1x <- read.table("data/pca_dapc/jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.ab_1pRt_100kb.pca.eigenval",sep=" ",header=F)
+
+hist(pca1x$V1)
+varexx <- pca1x %>% mutate(varex=V1/sum(V1), percVarex=round(V1/sum(V1)*100, 2))
+
+pca2x <- read.table("data/pca_dapc/jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.ab_1pRt_100kb.pca.eigenvec",sep="\t",header=F)
+
+
+# fix names
+pca2x$V2 <- gsub("FC815-212", "FC8-15-212",  pca2x$V2)
+
+# add pops
+pca2x.meta <- pca2x %>% mutate("sample"=V2) %>% separate(sample, into = c("pop", "stuff")) %>% dplyr::select(-stuff)
+
+# fix more names and re-factor
+pca2x.meta$pop <- convert_pop_names(pca2x.meta$pop)
+
+# pca colored by indiv pop
+pop_levels <- c("LOA", "EastGC11", "EastGC10", "EastGC7", "EastGC9", "EastGC2", "EastGC1", "EastGC3", "EastGC4", "EastGC13", "WestGC1", "WestGC2", "WestGC3", "Hotel5", "WestGC6", "Hotel1", "Hotel2", "Hotel3", "Hotel4", "Apt1", "Apt3", "Apt2", "Private1", "Drain1")
+
+pca2x.meta$pop <- factor(pca2x.meta$pop, pop_levels)
+
+# pca color by genetic group
+pca2x.meta$deme <- case_when(
+  pca2x.meta$pop %in% c("Drain1") ~ "Group5",
+  pca2x.meta$pop %in% c("Apt1", "Apt2", "Apt3") ~ "Group1",
+  pca2x.meta$pop %in% c("WestGC1", "WestGC2", "WestGC3", "WestGC6", "Hotel5") ~ "Group2_WestGC",
+  pca2x.meta$pop %in% c("Hotel1", "Hotel2", "Hotel3", "Hotel4") ~ "Group2_Hotel",
+  pca2x.meta$pop %in% c("EastGC11", "EastGC10", "EastGC7", "EastGC13", "EastGC1", "EastGC9") ~ "Group3_EastGC_SW",
+  pca2x.meta$pop %in% c("EastGC2","EastGC3", "EastGC4") ~ "Group3_EastGC_NE",
+  pca2x.meta$pop %in% c("Private1") ~ "Group4",
+  TRUE ~ NA_character_
+)
+
+pca2x.meta$deme <- factor(pca2x.meta$deme, levels = c( "Group1", "Group2_WestGC", "Group2_Hotel", "Group3_EastGC_SW",  "Group3_EastGC_NE",  "Group4", "Group5"))
+
+myCol <- brewer.pal(n = 10, name = 'Paired') 
+
+pcaCols <- c("Group1" = myCol[8], "Group2_WestGC" = myCol[1], "Group2_Hotel" = myCol[2], "Group3_EastGC_SW" = myCol[3], "Group3_EastGC_NE" = myCol[4], "Group4" = myCol[6], "Group5" = myCol[9])
+  
+
+pclrk.pca.p3 <- ggplot(data=pca2x.meta, aes(V3,V4, color=deme)) +
+  geom_point(size=5, alpha=0.75) +
+  xlab(paste("PC1","(",varexx$percVarex[1],"%",")")) + ylab(paste("PC2","(",varexx$percVarex[2],"%",")")) +
+  #scale_color_viridis_d() +
+  scale_color_manual(values=pcaCols) +
+  labs(color="Group") +
+  theme_minimal() +
+  theme(text = element_text(size=18)) 
+
+pclrk.pca.p4 <- ggarrange(pclrk.pca.p3, labels="AUTO", font.label = list(size=20))
+
+```
+
+&nbsp;
+&nbsp;
+
+# Cluster analysis - DAPC
+Read in VCF
+```{r}
+dat.vcf <-  read.vcfR(file="data/jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.ab_1pRt_100kb.recode.vcf") 
+
+dat.genind <- vcfR2genind(dat.vcf, sep = "[|/]") ## Create genind object
+
+# get pop names
+dat.pops <- dat.genind@tab[,1] %>%
+  names() %>%
+  as_tibble %>%
+  separate(value, into = (c("Pop", NA))) 
+
+# fix names, refactor, and reassign
+rownames(dat.genind$tab) <- gsub("FC815-212", "FC8-15-212", rownames(dat.genind$tab))
+
+dat.pops$Pop <- convert_pop_names(dat.pops$Pop)
+dat.pops <- dat.pops %>% mutate(Pop = as.factor(Pop))
+
+dat.genind@pop <- dat.pops$Pop
+```
+
+&nbsp;
+
+```{r Overall DAPC}
+# Run find.clusters - make sure MB2a is MB2
+set.seed(21)
+
+grp.stats <- find.clusters(dat.genind, max.n.clust=40, n.pca=200, choose.n.clust=FALSE)
+grp <- find.clusters(dat.genind, max.n.clust=40, n.pca = 400, n.clust = 7)
+# chose n.pca = 400, n.clusters= 7
+
+grp.K <- grp.stats$Kstat %>% as.data.frame() %>% mutate(K=1:40) %>% rename("BIC"=".") %>%
+ggplot(aes(x=K, y=BIC)) +
+  geom_line(color="gray") +
+  geom_point(shape=21, fill= "gray", size=3) +
+  geom_vline(xintercept = length(grp$size), linetype="dashed", color="black") +
+  #ggtitle("All sites") +
+  theme_minimal() +
+  theme(text=element_text(size=16))
+
+grp.K.2 <- ggarrange(grp.K, labels = "C")
+
+# dapc1 <- dapc.genind(x = dat.genind, pop = grp$grp, n.pca = 200, n.da = 6) # n.da=6
+# 
+# # Run optim a to find how many PCs to retain
+# temp <- optim.a.score(dapc1)
+# 
+# # Rerun dapc with optim pcs
+# dapc2 <- dapc.genind(x = dat.genind, pop = grp$grp, n.pca = 25, n.da = 6) # n.da=6
+
+# Load dapc2 RDS
+dapc2 <- readRDS("data/pca_dapc/dapcAll_dapc2.rds")
+
+myCol <- brewer.pal(n = 10, name = 'Paired')
+#display.brewer.pal(n = 10, name = 'Paired')
+#scales::show_col(myCol)
+#clusCols <- c("1" = myCol[2], "2" = myCol[6], "3" = myCol[4], "4" = myCol[1], "5" = myCol[7], "6" = myCol[10], "7" = myCol[8], "8" = myCol[3], "9" = myCol[9])
+clusCols <- c("1" = myCol[2], "2" = myCol[9], "3" = myCol[6], "4" = myCol[3], "5" = myCol[8], "6" = myCol[1], "7" = myCol[4])
+  
+
+DAPC_2_probs <- round(dapc2$posterior, 2) %>%
+  as_tibble(rownames = "SampleID") %>% 
+  mutate(WaterbodyName = dat.genind@pop) %>% 
+  pivot_longer(cols = 2:8,   ## change depending on the number of groups
+               names_to = "Cluster", 
+               values_to = "Probability")
+
+DAPC_2_probs <- DAPC_2_probs %>%  mutate(WaterbodyName = fct_relevel(WaterbodyName, "Apt1", "Apt2", "Apt3", "WestGC1", "WestGC2", "WestGC3", "WestGC6", "Hotel5", "Hotel1", "Hotel2", "Hotel3", "Hotel4", "EastGC1", "EastGC7", "EastGC9", "EastGC10","EastGC11", "EastGC13", "EastGC2", "EastGC3", "EastGC4", "Private1", "Drain1"))
+
+# Plot genetic lineage #
+dapc.clus.p <- DAPC_2_probs %>% 
+  ggplot(aes(SampleID, Probability, fill = factor(Cluster))) +
+  geom_col(color = "gray", linewidth = 0.03, show.legend = F) +
+  facet_grid(~WaterbodyName, 
+             switch = "x", 
+             scales = "free", 
+             space = "free") +
+  labs(x = "Waterbody", y = "Ancestry") +
+  scale_y_continuous(expand = c(0, 0)) +
+  scale_x_discrete(expand = expansion(add = 1)) +
+  #scale_fill_viridis_d(option = "plasma") +
+  scale_fill_manual(values=clusCols) +
+  ggtitle("DAPC cluster assignment")+
+  theme(plot.title = element_text(size = 10)) +
+  theme_minimal(base_size = 10) + 
+  theme(panel.spacing.x = unit(0.001, "lines"),
+        axis.text.x = element_blank(),
+        panel.grid = element_blank()) + 
+  #guides(fill = guide_legend(title = "Genetic Lineage")) +
+  theme(strip.text.x = element_text(angle = 90, size = 12))
+
+
+#set.seed(NULL)
+```
+
+&nbsp;
+
+## Figure 3 - Combine PCA, bestK, overall DAPC
+```{r Figure 3}
+toprow <- ggarrange(pclrk.pca.p3, grp.K, labels = c("A", "B"), widths = c(1, 0.5))
+botrow <- ggarrange(dapc.clus.p, labels = "C")
+
+all_pca.dapc <- ggarrange(toprow, botrow, nrow = 2)
+
+ggsave(all_pca.dapc, filename="figures/figure3_allPCA_bestk_dapc.png", width=40, height=30, dpi = 400, bg = "white")
+
+```
+
+&nbsp;
+
+## Define waterbody colors
+```{r}
+# define colors
+myCol <- brewer.pal(n = 10, name = 'Paired') 
+
+popCols <- c("Apt1" = myCol[8], "Apt3" = myCol[8], "Apt2" = myCol[8], "WestGC1" = myCol[1], "WestGC2" = myCol[1], "WestGC3" = myCol[1], "WestGC6" = myCol[1], "Hotel5" = myCol[2], "Hotel1" = myCol[2], "Hotel2" = myCol[2], "Hotel3" = myCol[2], "Hotel4" = myCol[2], "EastGC11" = myCol[3],"EastGC10" = myCol[3],"EastGC7" = myCol[3], "EastGC9" = myCol[3], "EastGC1" = myCol[3], "EastGC13" = myCol[3], "EastGC2" = myCol[4], "EastGC3" = myCol[4], "EastGC4" = myCol[4], "Private1" = myCol[6], "Private2" = myCol[6], "Drain1" = myCol[9])
+```
+
+&nbsp;
+
+## DAPC - Group 1
+```{r}
+g1.seed = 123
+set.seed(g1.seed)
+
+dat.genind.g1 <- poppr::popsub(dat.genind, sublist=c("Apt1", "Apt2", "Apt3")) #42 individuals; 2,672 loci
+
+# dapc
+dapc.g1 <- dapc(dat.genind.g1, var.contrib = TRUE, scale = FALSE, n.pca = 5,  n.da = nPop(dat.genind.g1) - 1)
+
+
+# reformat to df and plot
+dapc.g1.df <- cbind(as.data.frame(dapc.g1$ind.coord[,1:2]), dat.genind.g1@pop)
+names(dapc.g1.df) <- c("A1", "A2", "pop")
+centroids.g1 <- aggregate(cbind(A1, A2)~pop, dapc.g1.df, mean)
+  
+
+dapc.g1.p <- ggplot(dapc.g1.df, aes(x = A1, y = A2, color = pop)) +
+  geom_point(alpha = 0.25, size = 3) +
+  geom_point(data = centroids.g1, size = 5) +
+  #geom_text_repel(data=centroids.g1, aes(label=pop), box.padding = .4, size=6) +
+  geom_text_repel(data=centroids.g1, aes(label=pop, color="black"), box.padding = .4, size=6) +
+  scale_color_manual(values = popCols) +
+  ylab("Discriminant function 2") +
+  xlab("Discriminant function 1") +
+  stat_ellipse() +
+  #ylim(-5,7) +
+  #xlim(-1, 6) +
+  theme_minimal(base_size = 16) +
+  theme(legend.position="none") +
+  guides(size = "none",
+         shape = guide_legend(override.aes = list(size = 5)))
+
+dapc.g1.p
+
+set.seed(NULL)
+```
+
+&nbsp;
+
+### Cluster analysis - Group 1
+```{r}
+#dat.genind.g1
+
+# set seed
+g1.seed = 111
+set.seed(g1.seed)
+
+# Run find.clusters
+grp1.stats <- find.clusters(dat.genind.g1, max.n.clust=20, n.pca=200, choose.n.clust=FALSE)
+g1.grp <- find.clusters(dat.genind.g1, max.n.clust=20, n.pca = 40, n.clust = 2)
+# chose n.pca = 40, n.clusters= 2
+
+g1.K <- grp1.stats$Kstat %>% as.data.frame() %>% mutate(K=1:20) %>% rename("BIC"=".") %>% filter(K < 7) %>%
+ggplot(aes(x=K, y=BIC)) +
+  geom_line(color="gray") +
+  geom_point(shape=21, fill= "gray", size=3) +
+  geom_vline(xintercept = length(g1.grp$size), linetype="dashed", color="black") +
+  ggtitle("Group 1") +
+  theme_minimal(base_size = 16)
+
+g1.dapc1 <- dapc.genind(x = dat.genind.g1, pop = g1.grp$grp, n.pca = 40, n.da = 1) # n.pca=40, n.da=1
+
+# Run optim a to find how many PCs to retain
+g1.op <- optim.a.score(g1.dapc1)
+
+# Rerun dapc with optim pcs
+g1.dapc2 <- dapc.genind(x = dat.genind.g1, pop = g1.grp$grp, n.pca = 1, n.da = 1) # n.da=1
+
+# Reformat dataframe
+g1.DAPC_2_probs <- round(g1.dapc2$posterior, 2) %>%
+  as_tibble(rownames = "SampleID") %>% 
+  mutate(WaterbodyName = dat.genind.g1@pop) %>% 
+  pivot_longer(cols = 2:3,   ## change depending on the nuROWer of groups
+               names_to = "Cluster", 
+               values_to = "Probability") %>% 
+  mutate(WaterbodyName = fct_relevel(WaterbodyName, "Apt1", "Apt3", "Apt2"))
+
+
+g1.col <- c(myCol[7], myCol[8], "gray")
+
+
+g1.DAPC_2_probs <- g1.DAPC_2_probs %>% mutate(WaterbodyName = fct_relevel(WaterbodyName, "Apt1", "Apt3", "Apt2"))
+
+# Plot genetic lineage #
+g1.dapc.clus.p <- g1.DAPC_2_probs %>% 
+  ggplot(aes(SampleID, Probability, fill = factor(Cluster))) +
+  geom_col(color = "gray", linewidth = 0.03) +
+  facet_grid(~WaterbodyName, 
+             switch = "x", 
+             scales = "free", 
+             space = "free") +
+  labs(x = "Waterbody", y = "Ancestry") +
+  scale_y_continuous(expand = c(0, 0)) +
+  scale_x_discrete(expand = expansion(add = 1)) +
+  #scale_fill_viridis_d(option = "plasma") +
+  scale_fill_manual(values=g1.col) +
+  ggtitle("ROW group")+
+  theme(plot.title = element_text(size = 10)) +
+  theme_minimal(base_size = 10) + 
+  theme(panel.spacing.x = unit(0.001, "lines"),
+        axis.text.x = element_blank(),
+        panel.grid = element_blank()) + 
+  guides(fill = guide_legend(title = "Genetic Lineage")) +
+  theme(strip.text.x = element_text(angle = 90))
+
+set.seed(NULL)
+```
+
+&nbsp;
+
+## DAPC - Group 2
+```{r}
+dat.genind.Grp2 <- poppr::popsub(dat.genind, sublist=c("WestGC1", "WestGC2", "WestGC3", "WestGC6", "Hotel1", "Hotel2", "Hotel3", "Hotel4", "Hotel5")) # 333 individuals; 2,675 loci
+
+# dapc
+dapc.Grp2 <- dapc(dat.genind.Grp2, var.contrib = TRUE, scale = FALSE, n.pca = 60,  n.da = nPop(dat.genind.Grp2) - 1)
+
+
+# reformat to df and plot
+dapc.Grp2.df <- cbind(as.data.frame(dapc.Grp2$ind.coord[,1:7]), dat.genind.Grp2@pop)
+names(dapc.Grp2.df) <- c("A1", "A2", "A3", "A4", "A5", "A6", "A7", "pop")
+centroids.Grp2 <- aggregate(cbind(A1, A2)~pop, dapc.Grp2.df, mean)
+
+
+dapc.Grp2.p <- ggplot(dapc.Grp2.df, aes(x = A1, y = A2, color = pop)) +
+  geom_point(alpha = 0.25, size = 3) +
+  geom_point(data = centroids.Grp2, size = 5) +
+  #geom_text_repel(data=centroids.Grp2, aes(label=pop), box.padding = .4) +
+  geom_text_repel(data=centroids.Grp2, aes(label=pop, color="black"), box.padding = 2.2, size=6) + #changed box pad from 0.4 
+  scale_color_manual(values = popCols) +
+  ylab("Discriminant function 2") +
+  xlab("Discriminant function 1") +
+  stat_ellipse() +
+  #ylim(-5,7) +
+  #xlim(-1, 6) +
+  theme_minimal(base_size = 16) +
+  theme(legend.position="none") +
+  guides(size = "none",
+         shape = guide_legend(override.aes = list(size = 5)))
+
+dapc.Grp2.p
+```
+
+&nbsp;
+
+### Cluster analysis - Group 2
+```{r}
+#dat.genind.Grp2
+
+# set seed
+Grp2.seed = 222
+set.seed(Grp2.seed)
+
+# Run find.clusters
+grp2.stats <- find.clusters(dat.genind.Grp2, max.n.clust=20, n.pca=200, choose.n.clust=FALSE)
+grp2.grp <- find.clusters(dat.genind.Grp2, max.n.clust=20, n.pca=200, n.clust=2)
+# chose n.pca = 200, n.clusters= 2
+
+grp2.K <- grp2.stats$Kstat %>% as.data.frame() %>% mutate(K=1:20) %>% rename("BIC"=".") %>% filter(K < 7) %>% 
+ggplot(aes(x=K, y=BIC)) +
+  geom_line(color="gray") +
+  geom_point(shape=21, fill= "gray", size=3) +
+  geom_vline(xintercept = length(grp2.grp$size), linetype="dashed", color="black") +
+  ggtitle("Grp2 - MB+SBD") +
+  theme_minimal(base_size = 16)
+
+grp2.dapc1 <- dapc.genind(x = dat.genind.Grp2, pop = grp2.grp$grp, n.pca = 200, n.da = 1) # n.pca=200, n.da=1
+
+# Run optim a to find how many PCs to retain
+grp2.op <- optim.a.score(grp2.dapc1)
+
+# Rerun dapc with optim pcs
+grp2.dapc2 <- dapc.genind(x = dat.genind.Grp2, pop = grp2.grp$grp, n.pca = 1, n.da = 1) # n.da=1
+
+# Reformat dataframe
+grp2.DAPC_2_probs <- round(grp2.dapc2$posterior, 2) %>%
+  as_tibble(rownames = "SampleID") %>% 
+  mutate(WaterbodyName = dat.genind.Grp2@pop) %>% 
+  pivot_longer(cols = 2:3,   ## change depending on the number of groups
+               names_to = "Cluster", 
+               values_to = "Probability") %>% 
+  mutate(WaterbodyName = fct_relevel(WaterbodyName, "Hotel1", "Hotel2", "Hotel3", "Hotel4", "Hotel5", "WestGC1", "WestGC2", "WestGC3", "WestGC6"))
+
+
+
+grp2.col <- c(myCol[1], myCol[2], "gray")
+
+
+# Plot genetic lineage #
+grp2.dapc.clus.p <- grp2.DAPC_2_probs %>% 
+  ggplot(aes(SampleID, Probability, fill = factor(Cluster))) +
+  geom_col(color = "gray", linewidth = 0.03) +
+  facet_grid(~WaterbodyName, 
+             switch = "x", 
+             scales = "free", 
+             space = "free") +
+  labs(x = "Waterbody", y = "Ancestry") +
+  scale_y_continuous(expand = c(0, 0)) +
+  scale_x_discrete(expand = expansion(add = 1)) +
+  #scale_fill_viridis_d(option = "plasma") +
+  scale_fill_manual(values=grp2.col) +
+  ggtitle("Group2")+
+  theme(plot.title = element_text(size = 10)) +
+  theme_minimal(base_size = 10) + 
+  theme(panel.spacing.x = unit(0.001, "lines"),
+        axis.text.x = element_blank(),
+        panel.grid = element_blank()) + 
+  guides(fill = guide_legend(title = "Genetic Lineage")) +
+  theme(strip.text.x = element_text(angle = 90))
+
+set.seed(NULL)
+```
+
+&nbsp;
+
+## DAPC - Group 3
+```{r}
+dat.genind.g3 <- poppr::popsub(dat.genind, sublist=c("EastGC11","EastGC10","EastGC7", "EastGC9","EastGC2","EastGC1", "EastGC3", "EastGC4", "EastGC13"))
+
+# run dapc
+dapc.g3 <- dapc(dat.genind.g3, var.contrib = TRUE, scale = FALSE, n.pca = 50,  n.da = nPop(dat.genind.g3) - 1)
+
+
+# reformat to df and plot
+dapc.g3.df <- cbind(as.data.frame(dapc.g3$ind.coord[,1:4]), dat.genind.g3@pop)
+names(dapc.g3.df) <- c("A1", "A2", "A3", "A4", "pop")
+centroids.FC <- aggregate(cbind(A1, A2)~pop, dapc.g3.df, mean)
+
+
+dapc.g3.p <- ggplot(dapc.g3.df, aes(x = A1, y = A2, color = pop)) +
+  geom_point(alpha = 0.25, size = 3) +
+  geom_point(data = centroids.FC, size = 5) +
+  #geom_text_repel(data=centroids.FC, aes(label=pop), box.padding = .4, size=6) +
+  geom_text_repel(data=centroids.FC, aes(label=pop, color="black"), box.padding = .4, size=6) +
+  scale_color_manual(values = popCols) +
+  ylab("Discriminant function 2") +
+  xlab("Discriminant function 1") +
+  stat_ellipse() +
+  #ylim(-5,7) +
+  #xlim(-1, 6) +
+  theme_minimal(base_size = 16) +
+  theme(legend.position="none") +
+  guides(size = "none",
+         shape = guide_legend(override.aes = list(size = 5)))
+
+dapc.g3.p
+
+```
+
+&nbsp;
+
+### Cluster analysis - Group 3
+```{r}
+#dat.genind.FC
+
+# set seed
+g3.seed = 333
+set.seed(g3.seed)
+
+# Run find.clusters
+grp3.stats <- find.clusters(dat.genind.g3, max.n.clust=20, n.pca=200, choose.n.clust=FALSE)
+g3.grp <- find.clusters(dat.genind.g3, max.n.clust=20, n.pca=200, n.clust=3)
+# chose n.pca = 200, n.clusters= 3
+
+g3.K <- grp3.stats$Kstat %>% as.data.frame() %>% mutate(K=1:20) %>% rename("BIC"=".") %>% filter(K < 7) %>%
+ggplot(aes(x=K, y=BIC)) +
+  geom_line(color="gray") +
+  geom_point(shape=21, fill= "gray", size=3) +
+  geom_vline(xintercept = length(g3.grp$size), linetype="dashed", color="black") +
+  ggtitle("Grp 3") +
+  theme_minimal(base_size = 16)
+
+g3.dapc1 <- dapc.genind(x = dat.genind.g3, pop = g3.grp$grp, n.pca = 200, n.da = 2) # n.pca=200, n.da=2
+
+# Run optim a to find how many PCs to retain
+g3.op <- optim.a.score(g3.dapc1)
+
+# Rerun dapc with optim pcs
+g3.dapc2 <- dapc.genind(x = dat.genind.g3, pop = g3.grp$grp, n.pca = 19, n.da = 2) # n.da=2
+
+# Reformat dataframe
+g3.DAPC_2_probs <- round(g3.dapc2$posterior, 2) %>%
+  as_tibble(rownames = "SampleID") %>% 
+  mutate(WaterbodyName = dat.genind.g3@pop) %>% 
+  pivot_longer(cols = 2:4,   ## change depending on the number of groups
+               names_to = "Cluster", 
+               values_to = "Probability")
+
+g3.col <- c(myCol[3], "gray", myCol[4])
+
+# rename pops
+g3.DAPC_2_probs <-  g3.DAPC_2_probs %>% mutate(WaterbodyName = fct_relevel(WaterbodyName, "EastGC1", "EastGC7", "EastGC9", "EastGC10","EastGC11", "EastGC13", "EastGC2", "EastGC3", "EastGC4"))
+
+
+# Plot genetic lineage #
+g3.dapc.clus.p <- g3.DAPC_2_probs %>% 
+  ggplot(aes(SampleID, Probability, fill = factor(Cluster))) +
+  geom_col(color = "gray", linewidth = 0.03) +
+  facet_grid(~WaterbodyName, 
+             switch = "x", 
+             scales = "free", 
+             space = "free") +
+  labs(x = "Waterbody", y = "Ancestry") +
+  scale_y_continuous(expand = c(0, 0)) +
+  scale_x_discrete(expand = expansion(add = 1)) +
+  #scale_fill_viridis_d(option = "plasma") +
+  scale_fill_manual(values=g3.col) +
+  ggtitle("g3 group")+
+  theme(plot.title = element_text(size = 10)) +
+  theme_minimal(base_size = 10) + 
+  theme(panel.spacing.x = unit(0.001, "lines"),
+        axis.text.x = element_blank(),
+        panel.grid = element_blank()) + 
+  guides(fill = guide_legend(title = "Genetic Lineage")) +
+  theme(strip.text.x = element_text(angle = 90))
+
+set.seed(NULL)
+```
+
+&nbsp;
+
+#### Figure 4 - DAPC plots together 
+```{r Figure 4}
+# Plot best Ks for groups 1-3 
+bestK.p2 <- ggarrange( g1.K + ggtitle("Group 1") + theme(axis.title.y = element_blank(), axis.title.x = element_blank(), text= element_text(size = 12)),
+                       grp2.K + ggtitle("Group 2") + theme(axis.title.y = element_blank(), axis.title.x = element_blank(), text= element_text(size = 12)),
+                       g3.K + ggtitle("Group 3") + theme(axis.title.y = element_blank(), axis.title.x = element_blank(), text= element_text(size = 12)), nrow=1)
+
+bestK.p2.2 <- annotate_figure(bestK.p2, left = text_grob("BIC", rot = 90, size=16), bottom = text_grob("K", size=16))
+
+
+# Combine DAPCs for groups 1-3
+grp.dapcs <- ggarrange(dapc.g1.p + ggtitle("Group 1") + theme(axis.title.x = element_blank(), axis.title.y = element_blank(), title = element_text(size=12)),
+                       dapc.Grp2.p + ggtitle("Group 2")+ theme(axis.title.x = element_blank(), axis.title.y = element_blank(), title = element_text(size=12)),
+                       dapc.g3.p + ggtitle("Group 3")+ theme(axis.title.x = element_blank(), axis.title.y = element_blank(), title = element_text(size=12)),
+                       nrow = 1 )
+
+grp.dapcs.2 <- annotate_figure(grp.dapcs, left = text_grob("Discriminant function 2", rot = 90, size=18), bottom = text_grob("Discriminant function 1", size=18))
+
+
+# combine cluster plots for groups 1-3
+grp.dapcCluster <- ggarrange(g1.dapc.clus.p + ggtitle("Group 1") + theme(axis.title.y = element_blank(), axis.title.x = element_blank(), legend.position = "none"),
+        grp2.dapc.clus.p + ggtitle("Group 2") + theme(axis.title.y = element_blank(), axis.title.x = element_blank(), legend.position = "none"),
+        g3.dapc.clus.p + ggtitle("Group 3") + theme(axis.title.y = element_blank(), axis.title.x = element_blank(), legend.position = "none"),
+          ncol = 1, align="h")
+
+# combine cluster plots and dapc pca plots
+dapcBigPlot <- ggarrange(grp.dapcs, grp.dapcCluster, nrow=2, labels = "AUTO")
+
+# combine cluster plots and dapc pca plots AND best K - Figure 4
+grp.dapcCluster.ann <- annotate_figure(grp.dapcCluster, left = text_grob("Ancestry", rot = 90, size=12))
+dapcBigPlot2 <- ggarrange(grp.dapcs.2,bestK.p2.2, grp.dapcCluster.ann, nrow=3, labels = "AUTO", heights = c(1, 0.8, 0.8))
+
+ggsave(dapcBigPlot2, filename="figures/figure4_hires.png", width=18, height=15, dpi = 600, bg = "white")
+
+dapcBigPlot2
+```

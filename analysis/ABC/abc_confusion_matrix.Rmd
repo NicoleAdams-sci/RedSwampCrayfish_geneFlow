@@ -1,0 +1,56 @@
+---
+title: "Confusion matrix for model selection after ABC"
+author: "Nicole Adams"
+date: "2025-05-07"
+output: 
+  html_document:
+    toc: true
+    code_folding: show
+---
+
+```{r setup, include=FALSE, echo=TRUE}
+# Load necessary packages
+library(tidyverse)
+library(abcrf)
+
+# Define Rmd knit options
+knitr::opts_knit$set(root.dir = "..")
+knitr::opts_chunk$set(
+	fig.height = 6,
+	fig.width = 8,
+	warning = FALSE, # suppress warnings
+	message = FALSE # suppress messages
+)
+#echo = FALSE # defaults to not showing R code, change chunk to echo=TRUE where wanted
+
+# Set eval=FALSE for all bash chunks
+knitr::opts_hooks$set(
+  engine = function(options) {
+    if (options$engine == "bash") {
+      options$eval <- FALSE
+    }
+    options
+  }
+)
+```
+
+&nbsp;
+
+# Run the random forest analysis - this was done on the MSU ICER cluster
+```{bash}
+rsc_RF_pred_subset.R
+
+```
+
+&nbsp;
+
+# Load the result and get the confusion matrix - Table S7
+```{r Table S7}
+load("output/ABC_output/rsc_RF_forest_100ksubset.rda")
+
+forest$model.rf$confusion.matrix
+
+write.csv(forest$model.rf$confusion.matrix, file = "tables/tableS7_rf_confusion_matrix.csv", quote = F, row.names = T)
+
+```
+

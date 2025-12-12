@@ -1,0 +1,960 @@
+---
+title: "Data Processing (fastq to bams) for sequencing data produced by Sard and Homola"
+author: "Nicole Adams"
+date: '2022-06-21'
+output: 
+  html_document:
+    toc: true
+    code_folding: show
+---
+
+```{r setup, include=FALSE, echo=TRUE}
+# Load necessary packages
+library(tidyverse)
+library(data.table)
+library(viridisLite)
+library(readxl)
+library(lubridate)
+library(kableExtra)
+library(ggrepel)
+library(ggpubr)
+
+# Define Rmd knit options
+knitr::opts_knit$set(root.dir = "..")
+knitr::opts_chunk$set(
+	fig.height = 6,
+	fig.width = 8,
+	warning = FALSE, # suppress warnings
+	message = FALSE # suppress messages
+)
+#echo = FALSE # defaults to not showing R code, change chunk to echo=TRUE where wanted
+
+# Set eval=FALSE for all bash chunks
+knitr::opts_hooks$set(
+  engine = function(options) {
+    if (options$engine == "bash") {
+      options$eval <- FALSE
+    }
+    options
+  }
+)
+```
+
+# Seq processesing for 2022 sequencing run of Red Swamp Crayfish
+Samples were sequenced at MSU's RTSF Genomics Core, project ID ADA12634 (RSC_novaSeq_2022). We submitted a single pool made up of 24 Illumina compatible libraries. The pool was QC’d and quantified using a combination of Qubit dsDNA HS, Agilent 4200 TapeStation HS DNA1000 and Invitrogen Collibri Library Quantification qPCR assays. The pool was loaded onto one (1) lane of a NovaSeq S4 flow cell and sequencing performed in a 2x150bp paired end read format using a NovaSeq 6000 v1.5 300 cycle reagent kit. Base calling was done by Illumina Real Time Analysis (RTA) v3.4.4 and output of RTA was demultiplexed and converted to FastQ format with Illumina Bcl2fastq v2.20.0.
+
+&nbsp;
+
+## Download raw sequence data from RTSF
+Bash commands for getting raw data from MSU RTSF to MSU HPCC. Following the RTSF [instructions](https://rtsf.natsci.msu.edu/genomics/data-retrieval/#HPCC)
+```{bash, eval=FALSE, message=FALSE}
+# FTPS transfer from the RTSF FTP server to the HPCC only works if you are currently working from the rsync login node. Data for this run is in subdirectory 20220616_DNASeq_PE150
+
+cd /mnt/home/adamsn23/RedSwampCrayfish/rawData2022
+
+module load GCCcore/6.4.0 wget/1.19.4
+
+wget -r -np -nH --ask-password ftps://scribnerk@titan.bch.msu.edu/20220616_DNASeq_PE150
+
+# check files with md5
+for FILE in *gz; do md5sum $FILE; done
+
+# in excel I compared content of md5.txt with the result of md5 check and they were the same
+```
+
+&nbsp;
+
+### Organize directories
+```{bash, eval=FALSE, message=FALSE}
+# /Users/neasci/Documents/crayfish_lab/RSCseq2022
+
+# I renamed rawData2022 and the raw data directory
+mv rawData2022/ seq2022/ 
+mv 20220616_DNASeq_PE150/ rawData2022/ 
+```
+
+&nbsp;
+&nbsp;
+&nbsp;
+
+## Pre-processing 
+
+&nbsp;
+
+### Make directories needed for flipReads
+```{bash, eval=FALSE}
+# Create directories needed for 2_flipReads_NEA.sh
+mkdir /mnt/home/adamsn23/RedSwampCrayfish/seq2022/scripts
+mkdir /mnt/home/adamsn23/RedSwampCrayfish/seq2022/QSTAT
+mkdir /mnt/home/adamsn23/RedSwampCrayfish/seq2022/SHELL
+mkdir /mnt/home/adamsn23/RedSwampCrayfish/seq2022/SHELL/dependencies
+
+#mkdir /mnt/gs18/scratch/users/adamsn23/RSC/
+mkdir /mnt/gs21/scratch/adamsn23/RSC/seq2022 # new HPCC scratch space, used to be /mnt/gs21/scratch/gs18
+
+```
+
+&nbsp;
+&nbsp;
+
+## Unzip and flip reads
+(.../RedSwampCrayfish/seq2022/scripts/2_flipReads_NEA.sh)
+```{bash, eval=FALSE}
+#==================================================================================================
+#   File: Flip_reads.sh
+#   Date: 01/05/21, 02/03/2022 (NEA), 06/28/2022 (NEA)
+#   Description: Flip the orientation of the Best RAD reads
+#--------------------------------------------------------------------------------------------------
+#       Authors: Jared Homola, Nicole Adams
+#==================================================================================================
+
+#Define alias for project root directory
+DATA_PATH=/mnt/home/adamsn23/RedSwampCrayfish/seq2022/rawData2022
+my_PATH=/mnt/home/adamsn23/RedSwampCrayfish/seq2022
+SCR=/mnt/gs21/scratch/adamsn23/RSC/seq2022   #changed from /mnt/gs18/scratch/users/adamsn23/RSC/seq2022 
+
+mkdir $my_PATH/SHELL/flipReads
+mkdir $my_PATH/QSTAT/flipReads
+
+mkdir $SCR/unzipped/
+mkdir $SCR/flipped/ #this line wasn't in Jared's script
+
+
+### Unzip the files
+cd $my_PATH/SHELL/flipReads
+
+find $DATA_PATH -name '*.fastq.gz' | while read -r LINE
+do
+dat=$(echo $LINE | awk -F "/" '{print $8}' | awk -F ".fastq" '{print $1}')
+datn=$(echo $LINE | awk -F "/" '{print $8}' | awk -F "_" '{print $2}') 
+
+echo '#!/bin/sh 
+#SBATCH -N 1
+#SBATCH -t 1:00:00
+#SBATCH --mem 64G 
+#SBATCH -J '$datn'_unzip
+#SBATCH -o '$my_PATH'/QSTAT/flipReads/'$datn'_unzip.o
+#SBATCH --error='$my_PATH'/QSTAT/flipReads/'$datn'_unzip.err
+
+## Unzip
+gunzip -c '$LINE' > '$SCR'/unzipped/'$dat'.fastq
+
+scontrol show job ${SLURM_JOB_ID} $' > "$datn"_unzip.sh
+
+sbatch "$datn"_unzip.sh
+
+done
+
+
+#### Flip reads
+
+cd $my_PATH/SHELL/flipReads
+
+find $DATA_PATH -name '*1_001.fastq.gz' | while read -r LINE
+do
+dat=$(echo $LINE | awk -F "/" '{print $8}' | awk -F ".fastq" '{print $1}')
+datn=$(echo $LINE | awk -F "/" '{print $8}' | awk -F "_" '{print $2}') 
+num=$(echo $LINE | awk -F "/" '{print $8}' | awk -F "_" '{print $3}')
+
+echo '#!/bin/sh 
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH -t 12:00:00
+#SBATCH --cpus-per-task=1
+#SBATCH --mem-per-cpu=64G
+#SBATCH -J '$datn'_flipReads
+#SBATCH -o '$my_PATH'/QSTAT/flipReads/'$datn'_flipReads.o
+#SBATCH --error='$my_PATH'/QSTAT/flipReads/'$datn'_flipReads.err
+
+perl '$my_PATH'/SHELL/dependencies/bRAD_flip_trim.pl \
+    '$my_PATH'/SHELL/dependencies/'$datn'_barcodes.txt \
+    '$SCR'/unzipped/RSC_'$datn'_'$num'_L004_R1_001.fastq \
+    '$SCR'/unzipped/RSC_'$datn'_'$num'_L004_R2_001.fastq \
+    '$SCR'/flipped/'$datn'_flipped.1.fq \
+    '$SCR'/flipped/'$datn'_flipped.2.fq
+    
+
+scontrol show job ${SLURM_JOB_ID} $' > "$datn"_flipReads.sh
+sbatch "$datn"_flipReads.sh
+
+done
+
+```
+
+&nbsp;
+
+Run jobs
+```{bash, eval=FALSE}
+bash scripts/2_flipReads_NEA.sh
+```
+
+&nbsp;
+
+### Zip the flipped reads
+(.../RedSwampCrayfish/seq2022/scripts/3_zipFlipped_NEA.sh)
+```{bash, eval=FALSE}
+#==================================================================================================
+#   File: Zip_flipped.sh
+#   Date: 01/06/21, 02/07/2022 (NEA), 06/28/2022 (NEA)
+#   Description: Zip the flipped best RAD reads
+#--------------------------------------------------------------------------------------------------
+#       Authors: Jared Homola, Nicole Adams
+#==================================================================================================
+
+#Define alias for project root directory
+my_PATH=/mnt/home/adamsn23/RedSwampCrayfish/seq2022
+SCR=/mnt/gs18/scratch/users/adamsn23/RSC/seq2022
+
+cd $my_PATH/SHELL/flipReads
+
+ls $SCR/flipped | grep -v ".2.fq" | awk -F "_flipped" '{print $1}' | while read -r LINE
+do
+
+echo '#!/bin/sh 
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH -t 3:59:00
+#SBATCH --cpus-per-task=1
+#SBATCH --mem-per-cpu=64G
+#SBATCH -J Zip_'$LINE'
+#SBATCH -o '$my_PATH'/QSTAT/flipReads/Zip_'$LINE'.o
+#SBATCH --error '$my_PATH'/QSTAT/flipReads/Zip_'$LINE'.err
+
+cd '$SCR'/flipped
+
+gzip < ./'$LINE'_flipped.1.fq > '$LINE'_flipped.1.fq.gz
+gzip < ./'$LINE'_flipped.2.fq > '$LINE'_flipped.2.fq.gz
+
+scontrol show job ${SLURM_JOB_ID} $' > Zip_"$LINE".sh
+
+sbatch Zip_"$LINE".sh
+
+done
+
+```
+
+&nbsp;
+&nbsp;
+
+## Demultiplex the libraries into individual samples
+(.../RedSwampCrayfish/seq2022/scripts/4_demultiplex_NEA.sh)
+```{bash, eval=FALSE}
+#==================================================================================================
+#   File: 4_demultiplex.sh
+#   Date: 01/06/21,  02/08/2022 (NEA), 06/28/2022 (NEA)
+#   Description: Demultiplex libraries using process_radtags
+#--------------------------------------------------------------------------------------------------
+#   Author: Jared Homola, Nicole Adams
+#==================================================================================================
+
+RUN_PATH=/mnt/home/adamsn23/RedSwampCrayfish/seq2022
+SCR=/mnt/gs21/scratch/adamsn23/RSC/seq2022 # changed from /mnt/gs18/scratch/users/adamsn23/RSC/seq2022
+
+mkdir $RUN_PATH/SHELL/demult
+mkdir $RUN_PATH/QSTAT/demult
+mkdir $SCR/demult
+
+cd $RUN_PATH/SHELL/demult
+
+### Demultiplex 
+ls $SCR/flipped | grep -v ".gz" | grep -v ".2.fq" | awk -F "_flipped" '{print $1}' | while read -r LINE
+do
+
+echo '#!/bin/sh 
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH -t 5:00:00
+#SBATCH --cpus-per-task=1
+#SBATCH --mem-per-cpu=24G
+#SBATCH -J '$LINE'_demultiplex
+#SBATCH -o '$RUN_PATH'/QSTAT/demult/'$LINE'_demultiplex.o
+#SBATCH --error '$RUN_PATH'/QSTAT/demult/'$LINE'_demultiplex.err
+
+module purge
+module load GCC/9.3.0 OpenMPI/4.0.3 Stacks/2.59
+
+process_radtags \
+    -1 '$SCR'/flipped/'$LINE'_flipped.1.fq.gz \
+    -2 '$SCR'/flipped/'$LINE'_flipped.2.fq.gz \
+    -i gzfastq \
+    -y gzfastq \
+    -o '$SCR'/demult/ \
+    -b '$RUN_PATH'/SHELL/dependencies/'$LINE'_barcodes.txt \
+    --inline_null \
+    -e sbfI \
+    --barcode_dist_1 1 \
+    --retain_header
+
+scontrol show job ${SLURM_JOB_ID}' > demultiplex_"$LINE".sh
+
+sbatch demultiplex_"$LINE".sh
+
+done
+```
+
+&nbsp;
+
+### Combine demultiplex results
+```{bash, eval=FALSE}
+cd /mnt/home/adamsn23/RedSwampCrayfish/seq2022/
+
+### Summarize demult results
+
+echo "LIB totSequences retainedReads percRetained" > OUT/demultRes.txt
+
+for FILE in QSTAT/demult/Lib*_demultiplex.err
+do
+ind=$(echo $FILE | awk -F "/" '{print $3}' | awk -F "_" '{print $1}')
+res1=$(grep 'total sequences' $FILE | grep -Eo '[0-9]{1,}' | tr -s '\n' '\t')
+res2=$(grep 'retained reads (' $FILE | grep -Eo '[0-9]{1,}' | tr -s '\n' '\t')
+echo $ind $res1 $res2 >> OUT/demultRes.txt
+done
+
+```
+
+&nbsp;
+&nbsp;
+
+## Remove PCR clones
+(.../RedSwampCrayfish/seq2022/scripts/5_removeClones_NEA.sh)
+Since the number of samples exceeds how many jobs that can be run on the HPCC I split them up: grep "group1", grep "group2A", grep "group2B"; then did grep -v "group1" | grep -v "group2A" | grep -v "group2B" to get the rest
+```{bash, eval=FALSE}
+#==================================================================================================
+#   File: removeClones.sh
+#   Date: 01/06/21, 02/08/2022 (NEA), 06/28/2022 (NEA)
+#   Description: Filter clonal reads from data
+#--------------------------------------------------------------------------------------------------
+#	Authors: Jared Homola, Nicole Adams
+#==================================================================================================
+
+#Define alias for project root directory
+RUN_PATH=/mnt/home/adamsn23/RedSwampCrayfish/seq2022
+SCR=/mnt/gs18/scratch/users/adamsn23/RSC/seq2022
+
+mkdir $SCR/cloneFilter
+mkdir $RUN_PATH/SHELL/cloneFilter
+mkdir $RUN_PATH/QSTAT/cloneFilter
+mkdir $RUN_PATH/OUT
+
+cd $RUN_PATH/SHELL/cloneFilter
+
+# too many files to submit to slurm so did FC and XX separate, then did the rest
+ls $SCR/demult/ | grep "fq" | grep -v ".2.fq.gz" | grep -v "rem" | grep "FC" | sed 's/\.1\.fq\.gz//g' | sort | uniq | while read -r LINE
+#ls $SCR/demult/ | grep "fq" | grep -v ".2.fq.gz" | grep -v "rem" | grep -v "PC" | grep -v "FC" | sed 's/\.1\.fq\.gz//g' | sort | uniq | while read -r LINE
+do
+
+echo '#!/bin/sh 
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH -t 1:00:00
+#SBATCH --cpus-per-task=1
+#SBATCH --mem-per-cpu=32G
+#SBATCH -J '$LINE'_cloneFilter
+#SBATCH -o '$RUN_PATH'/QSTAT/cloneFilter/cloneFilter.'$LINE'.o
+#SBATCH --error '$RUN_PATH'/QSTAT/cloneFilter/cloneFilter.'$LINE'.err
+
+module purge
+module load GCC/9.3.0 OpenMPI/4.0.3 Stacks/2.59
+
+clone_filter -1 '$SCR'/demult/'$LINE'.1.fq.gz \
+    -2 '$SCR'/demult/'$LINE'.2.fq.gz \
+    -i gzfastq \
+    -o '$SCR'/cloneFilter/
+
+scontrol show job ${SLURM_JOB_ID}' > ./cloneFilter."$LINE".sh
+
+sbatch ./cloneFilter."$LINE".sh
+
+done
+
+
+### Summarize results
+##grep '% clone reads' $RUN_PATH/QSTAT/cloneFilter/cloneFilter*.err >> $RUN_PATH/OUT/cloneFilterRes.txt
+
+#for FILE in QSTAT/cloneFilter/cloneFilter*.err 
+#do 
+#ind=$(echo $FILE | awk -F "/" '{print $3}' | awk -F "." '{print $2}')  
+##perc=$(grep -oP '.{0,5}%' $FILE) 
+#res=$(grep '% clone'  $FILE | grep -Eo '[0-9]{1,}' | tr -s '\n' '\t') 
+#echo $ind $res >> OUT/cloneFilterRes.txt 
+#done 
+```
+
+&nbsp;
+
+### Look at clone results
+```{r}
+cl <- read.delim("~/Documents/crayfish_lab/RSCseq2022/cloneFilterRes.txt", header = F) #N=2284
+
+cl2 <- cl %>% separate(V1, into = c("ind", "inputPairs", "outputPairs", "discardedPairs", "clone1", "clone2"), sep = " ") %>% unite("percCloneReads", clone1:clone2, sep = ".") 
+
+cols2chg <- c("inputPairs", "outputPairs", "discardedPairs", "percCloneReads")
+cl2[cols2chg] <- sapply(cl2[cols2chg],as.numeric)
+
+meta.df2 <- cl2
+
+# Plot distribution of percent clone reads
+cl.qts <- quantile(meta.df2$percCloneReads,probs=c(.05,.95), na.rm = T)
+
+percClone.p <- ggplot(meta.df2, aes(percCloneReads)) +
+    geom_histogram(binwidth = 2) +
+  geom_vline(xintercept = cl.qts[1], color="red", linetype="dashed") +
+  geom_vline(xintercept = cl.qts[2], color="red", linetype="dashed") +
+    theme_minimal()
+
+# Plot percent clone reads per individual
+percClone.p2 <- ggplot(meta.df2, aes(x=reorder(ind, -percCloneReads), y=percCloneReads)) +
+    geom_point() +
+    theme_minimal() +
+  labs(x="Individual") +
+  theme(axis.text.x = element_blank(), panel.grid.major = element_blank())
+
+
+# Summarize percent clone reads per individual
+cl.tabA <- meta.df2 %>% summarise(mean=mean(percCloneReads), sd=sd(percCloneReads)) # 69%
+
+# list samples with high number of clones
+high.clone <- meta.df2 %>% filter(percCloneReads > cl.qts[2])
+
+
+high.clone %>% dplyr::select(ind, percCloneReads) %>% kbl(
+  caption = "Samples with high amount of clone reads",
+  col.names = c("Individual ID", "Percent clone reads"), # Clean column names
+  align = 'c',
+  format = "html")  %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed"), # Popular styling options
+    full_width = T)
+
+ggarrange(percClone.p, percClone.p2)
+
+```
+
+&nbsp;
+&nbsp;
+
+## Trim and filter
+(.../RedSwampCrayfish/seq2022/scripts/6_trimQualityFilter_NEA.sh)
+Since the number of samples exceeds how many jobs that can be run on the HPCC I split them up: grep "FC", grep "MB", grep "SHD"; then did grep -v "FC" | grep -v "MB" | grep -v "SHD" to get the rest
+```{bash, eval=FALSE}
+#==================================================================================================
+#   File: 6_trimQualityFilter.sh
+#   Date: 01/07/20, 02/10/2022 (NEA), 06/29/2022 (NEA)
+#   Description: Use Trimmomatic to trim reads and quality filter
+#--------------------------------------------------------------------------------------------------
+#	Authors: Jared Homola, Nicole Adams
+#==================================================================================================
+
+RUN_PATH=/mnt/home/adamsn23/RedSwampCrayfish/seq2022
+SCR=/mnt/gs18/scratch/users/adamsn23/RSC/seq2022
+
+### Need to rename files by removing the extra .1 or .2 that was inserted
+find $SCR/cloneFilter -type f -name '*.1.1.fq.gz' | while read FILE ; do
+    newfile="$(echo ${FILE} | sed -e 's/\.1.fq.gz/.fq.gz/')" ;
+    mv "${FILE}" "${newfile}" ;
+done 
+
+find $SCR/cloneFilter -type f -name '*.2.2.fq.gz' | while read FILE ; do
+    newfile="$(echo ${FILE} | sed -e 's/\.2.fq.gz/.fq.gz/')" ;
+    mv "${FILE}" "${newfile}" ;
+done 
+
+
+mkdir $SCR/trimmed
+mkdir $RUN_PATH/SHELL/trimQualityFilter
+mkdir $RUN_PATH/QSTAT/trimQualityFilter
+
+cd $RUN_PATH/SHELL/trimQualityFilter
+
+ls $SCR/cloneFilter | grep "fq" | grep -v ".2.fq.gz" | grep "FC" | sed 's/\.1\.fq\.gz//g' | while read -r LINE
+do
+echo '#!/bin/sh 
+#SBATCH --nodes=1-4
+#SBATCH --ntasks=1
+#SBATCH -t 3:00:00
+#SBATCH --cpus-per-task=4
+#SBATCH --mem-per-cpu=8G
+#SBATCH -J '$LINE'.trimQualityFilter
+#SBATCH -o '$RUN_PATH'/QSTAT/trimQualityFilter/trimQualityFilter.'$LINE'.o
+#SBATCH --error '$RUN_PATH'/QSTAT/trimQualityFilter/trimQualityFilter.'$LINE'.err
+
+module purge
+module load Trimmomatic/0.39-Java-11 Java/1.8.0_162
+
+cd '$SCR'/cloneFilter
+java -jar $EBROOTTRIMMOMATIC/trimmomatic-0.39.jar PE -threads 4 -phred33 \
+'$LINE'.1.fq.gz '$LINE'.2.fq.gz \
+'$SCR'/trimmed/'$LINE'_paired.1.fq.gz '$SCR'/trimmed/'$LINE'_unpaired.1.fq.gz \ '$SCR'/trimmed/'$LINE'_paired.2.fq.gz '$SCR'/trimmed/'$LINE'_unpaired.2.fq.gz \
+ILLUMINACLIP:/mnt/research/Scribner_Lab/projects/RedSwampCrayfish_MISGP/SHELL/dependencies/adapters.fa:2:30:10 SLIDINGWINDOW:4:15 MINLEN:50 
+
+scontrol show job ${SLURM_JOB_ID}' > ./trimQualityFilter."$LINE".sh
+
+sbatch ./trimQualityFilter."$LINE".sh
+
+done
+
+
+###### How many reads were trimmed and filtered? ######
+#grep 'Surviving' $RUN_PATH/QSTAT/trimQualityFilter/trimQualityFilter*.o >> $RUN_PATH/OUT/trimQualityFilterRes.txt
+
+#for FILE in QSTAT/trimQualityFilter/trimQualityFilter*.err
+#do
+#ind=$(echo $FILE | awk -F "/" '{print $3}' | awk -F "." '{print $2}')
+#res=$(grep 'Surviving'  $FILE | awk -F " " '{print $4 "\t" $7 "\t" $8 "\t" $12 "\t" $13 "\t" $17 "\t" $18 "\t" $20 "\t" $21}')
+#echo $ind $res >> OUT/trimQualityFilterRes.txt
+#done
+
+```
+
+&nbsp;
+&nbsp;
+
+## Mapping to reference genome
+### Make files needed for mapping
+```{bash, eval=FALSE}
+mkdir $SCRATCH/RSC/seq2022/trimmed/paired
+
+mv $SCRATCH/RSC/seq2022/trimmed/*_paired* $SCRATCH/RSC/seq2022/trimmed/paired
+
+```
+
+&nbsp;
+
+### Map
+(.../RedSwampCrayfish/seq2022/scripts/8_bwaMemMap_NEA.sh)
+```{bash, eval=FALSE}
+#==================================================================================================
+#   File: bwaMemMap.sh
+#   Date: 01/07/21, 02/11/2022 (NEA), 07/04/2022 (NEA)
+#   Description: Map reads to reference genome using bwa-mem
+#--------------------------------------------------------------------------------------------------
+#	Authors: Jared Homola, Nicole Adams
+#==================================================================================================
+
+#Define alias for project root directory
+RUN_PATH=/mnt/home/adamsn23/RedSwampCrayfish/seq2022
+SCR=/mnt/gs18/scratch/users/adamsn23/RSC/seq2022
+
+mkdir $SCR/mapped
+mkdir $RUN_PATH/SHELL/mapping
+mkdir $RUN_PATH/QSTAT/mapping
+
+cd $RUN_PATH/SHELL/mapping
+ls $SCR/trimmed/paired | grep "fq" | grep -v ".2.fq.gz" | sed 's/\_paired.1\.fq\.gz//g' | grep "FC" | uniq | while read -r LINE
+do
+
+echo '#!/bin/sh 
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH -t 3:00:00
+#SBATCH --cpus-per-task=1
+#SBATCH --mem-per-cpu=36G
+#SBATCH -J '$LINE'.bwaMemMap
+#SBATCH -o '$RUN_PATH'/QSTAT/mapping/'$LINE'.bwaMemMap.o
+#SBATCH --error '$RUN_PATH'/QSTAT/mapping/'$LINE'.bwaMemMap.err
+
+module purge
+module load GCC/6.4.0-2.28 OpenMPI/2.1.1 BWA/0.7.17 SAMtools/1.9
+
+cd '$SCR'/trimmed/paired
+
+bwa mem -R "@RG\tID:'$LINE'\tSM:'$LINE'\tPL:ILLUMINA\tLB:LB1" /mnt/home/adamsn23/RedSwampCrayfish/reference/GCF_020424385.1_ASM2042438v2_genomic.fna ./'$LINE'_paired.1.fq.gz ./'$LINE'_paired.2.fq.gz | samtools view -Sb - > ../../mapped/'$LINE'.pe.bam 
+
+scontrol show job ${SLURM_JOB_ID}' > ./bwaMemMap."$LINE".sh
+
+sbatch ./bwaMemMap."$LINE".sh
+
+done
+
+```
+
+&nbsp;
+
+### Sort mapped BAMs
+(.../RedSwampCrayfish/seq2022/scripts/10_sortBAM_NEA.sh)
+```{bash, eval=FALSE}
+#==================================================================================================
+#   File: 10_sortBAM.sh
+#   Date: 01/07/20, 02/15/2022 (NEA), 07/04/2022 (NEA)
+#   Description: Sort BAM files
+#--------------------------------------------------------------------------------------------------
+#	Authors: Jared Homola, Nicole Adams
+#==================================================================================================
+
+#Define alias for project root directory
+RUN_PATH=/mnt/home/adamsn23/RedSwampCrayfish/seq2022
+SCR=/mnt/gs18/scratch/users/adamsn23/RSC/seq2022
+
+mkdir $RUN_PATH/QSTAT/sortBAM
+mkdir $RUN_PATH/SHELL/sortBAM_jobs
+mkdir $RUN_PATH/OUT/sorted
+
+cd $RUN_PATH/SHELL/sortBAM_jobs
+ls $SCR/mapped | grep bam | awk -F "." '{print $1}' | grep "SHD" | sort | uniq | while read -r LINE
+do
+echo '#!/bin/sh 
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH -t 1:00:00
+#SBATCH --cpus-per-task=1
+#SBATCH --mem-per-cpu=8G
+#SBATCH -J '$LINE'.sortBAM
+#SBATCH -o '$RUN_PATH'/QSTAT/sortBAM/'$LINE'.sortBAM.o
+#SBATCH --error '$RUN_PATH'/QSTAT/sortBAM/'$LINE'.sortBAM.err
+
+module purge
+module load GCC/9.3.0 SAMtools/1.15
+
+samtools sort '$SCR'/mapped/'$LINE'.pe.bam -o '$RUN_PATH'/OUT/sorted/'$LINE'.pe.sorted.bam
+
+scontrol show job ${SLURM_JOB_ID}' > ./sortBAM."$LINE".sh
+
+sbatch ./sortBAM."$LINE".sh
+
+done
+
+
+```
+
+&nbsp;
+
+## Filter mapped BAMs
+(.../RedSwampCrayfish/seq2022/scripts/11_filterBAMS_NEA.sh)
+-q 20=keep quality >= 20; -h=keep header; -f2=keep proper pairs(PROPER_PAIR)? ; -F2308=exclude unmapped reads, not primary alignment, supplementary alignment.  see [this calculater](https://broadinstitute.github.io/picard/explain-flags.html)
+```{bash, eval=FALSE}
+#==================================================================================================
+#   File: filterBAM.sh
+#   Date: 01/07/21, 03/03/2022 (NEA), 07/05/2022 (NEA)
+#   Description: Filter BAM files
+#--------------------------------------------------------------------------------------------------
+#	Authors: Jared Homola, Nicole Adams
+#==================================================================================================
+
+#Define alias for project root directory
+RUN_PATH=/mnt/home/adamsn23/RedSwampCrayfish/seq2022
+SCR=/mnt/gs18/scratch/users/adamsn23/RSC/seq2022
+
+mkdir $RUN_PATH/QSTAT/filterBAM
+mkdir $RUN_PATH/SHELL/filterBAM_jobs
+mkdir $RUN_PATH/OUT/filtered
+
+cd $RUN_PATH/SHELL/filterBAM_jobs
+ls $RUN_PATH/OUT/sorted | grep bam | awk -F "." '{print $1}' | grep "SHD" | sort | uniq | while read -r LINE
+do
+
+echo '#!/bin/sh 
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH -t 1:00:00
+#SBATCH --cpus-per-task=1
+#SBATCH --mem-per-cpu=8G
+#SBATCH -J '$LINE'.filterBAM
+#SBATCH -o '$RUN_PATH'/QSTAT/filterBAM/'$LINE'.filterBAM.o
+#SBATCH --error '$RUN_PATH'/QSTAT/filterBAM/'$LINE'.filterBAM.err
+
+module purge
+module load GCC/9.3.0 SAMtools/1.15
+
+cd '$RUN_PATH'/OUT/sorted
+samtools view -q 20 -h -f2 -F2308  '$LINE'.pe.sorted.bam | samtools view -Sb > ../filtered/'$LINE'.pe.sorted.filtered.bam
+
+scontrol show job ${SLURM_JOB_ID}' > ./filterBAM."$LINE".sh
+
+sbatch ./filterBAM."$LINE".sh
+
+done
+```
+
+&nbsp;
+
+## Mapping metrics
+(.../RedSwampCrayfish/seq2022/scripts/11B_mapMetrics_NEA.sh)  
+```{bash, eval=FALSE}
+#!/bin/sh 
+#SBATCH --nodes=1-4
+#SBATCH --ntasks=6
+#SBATCH -t 3:00:00
+#SBATCH --cpus-per-task=4
+#SBATCH --mem-per-cpu=8G
+#SBATCH -J mapMetrics
+#SBATCH -o /mnt/home/adamsn23/RedSwampCrayfish/seq2022/QSTAT/mapMetrics.o
+#SBATCH --error /mnt/home/adamsn23/RedSwampCrayfish/seq2022/QSTAT/mapMetrics.err
+
+#==================================================================================================
+#   File: 11B_mapMetrics_NEA.sh
+#   Date: 03/22/2022, 07/05/2022
+#   Description: Get summary of mapping
+#--------------------------------------------------------------------------------------------------
+#       Authors: Nicole Adams
+#==================================================================================================
+
+module purge
+module load GCC/9.3.0 SAMtools/1.15
+
+#Define alias for project root directory
+RUN_PATH=/mnt/home/adamsn23/RedSwampCrayfish/seq2022
+SCR=/mnt/gs18/scratch/users/adamsn23/RSC/seq2022
+BAM_PATH=/mnt/home/adamsn23/RedSwampCrayfish/seq2022/OUT/sorted
+
+
+cd $RUN_PATH/SHELL
+
+touch $BAM_PATH/mapSummary_seq2022.txt
+
+for sample in `ls $BAM_PATH/*sorted.bam | cut -f1 -d'.'`
+do
+  samtools flagstat "$sample".pe.sorted.bam -@ 6  > "$sample"_mapSum.txt
+ awk 'FNR == 1{ print FILENAME }' "$sample"_mapSum.txt >> $BAM_PATH/mapSummary_seq2022.txt
+ cat "$sample"_mapSum.txt >> $BAM_PATH/mapSummary_seq2022.txt
+
+done
+
+for sample in $BAM_PATH/*mapSum.txt; do awk 'FNR == 1{ print FILENAME } {printf "%-20s %-40s\n", $1, $3}' OFS="\t" $sample | awk '
+{
+    for (i=1; i<=NF; i++)  {
+        a[NR,i] = $i
+    }
+}
+NF>p { p = NF }
+END {
+    for(j=1; j<=p; j++) {
+        str=a[1,j]
+        for(i=2; i<=NR; i++){
+            str=str" "a[i,j];
+        }
+        print str
+    }
+}' >> $BAM_PATH/mapSummary_seq2022.2.txt; done
+
+grep 'mnt' $BAM_PATH/mapSummary_seq2022.2.txt > $BAM_PATH/mapSummary_seq2022.3.txt
+
+rm $BAM_PATH/*_mapSum.txt
+```
+
+&nbsp;
+
+### Repeat for filtered BAMs (11B_mapMetrics_filtered_NEA.sh)
+```{bash, eval=FALSE}
+#!/bin/sh 
+#SBATCH --nodes=1-4
+#SBATCH --ntasks=8
+#SBATCH -t 3:00:00
+#SBATCH --cpus-per-task=6
+#SBATCH --mem-per-cpu=8G
+#SBATCH -J mapMetrics
+#SBATCH -o /mnt/home/adamsn23/RedSwampCrayfish/seq2022/QSTAT/mapMetrics.o
+#SBATCH --error /mnt/home/adamsn23/RedSwampCrayfish/seq2022/QSTAT/mapMetrics.err
+
+#==================================================================================================
+#   File: 11B_mapMetrics_NEA.sh
+#   Date: 03/22/2022, 07/05/2022
+#   Description: Get summary of mapping
+#--------------------------------------------------------------------------------------------------
+#       Authors: Nicole Adams
+#==================================================================================================
+
+module purge
+module load GCC/9.3.0 SAMtools/1.15
+
+#Define alias for project root directory
+RUN_PATH=/mnt/home/adamsn23/RedSwampCrayfish/seq2022
+SCR=/mnt/gs18/scratch/users/adamsn23/RSC/seq2022
+BAM_PATH=/mnt/home/adamsn23/RedSwampCrayfish/seq2022/OUT/filtered
+
+
+cd $RUN_PATH/SHELL
+
+touch $BAM_PATH/mapSummary_seq2022_filt.txt
+
+for sample in `ls $BAM_PATH/*filtered.bam | cut -f1 -d'.'`
+do
+  samtools flagstat "$sample".pe.sorted.filtered.bam -@ 6  > "$sample"_mapSum.txt
+ awk 'FNR == 1{ print FILENAME }' "$sample"_mapSum.txt >> $BAM_PATH/mapSummary_seq2022_filt.txt
+ cat "$sample"_mapSum.txt >> $BAM_PATH/mapSummary_seq2022_filt.txt
+
+done
+
+for sample in $BAM_PATH/*mapSum.txt; do awk 'FNR == 1{ print FILENAME } {printf "%-20s %-40s\n", $1, $3}' OFS="\t" $sample | awk '
+{
+    for (i=1; i<=NF; i++)  {
+        a[NR,i] = $i
+  }
+}
+NF>p { p = NF }
+END {
+    for(j=1; j<=p; j++) {
+        str=a[1,j]
+        for(i=2; i<=NR; i++){
+            str=str" "a[i,j];
+        }
+        print str
+    }
+}' >> $BAM_PATH/mapSummary_seq2022_filt.2.txt; done
+
+grep 'mnt' $BAM_PATH/mapSummary_seq2022_filt.2.txt > $BAM_PATH/mapSummary_seq2022_filt.3.txt
+
+rm $BAM_PATH/*_mapSum.txt
+
+```
+
+&nbsp;
+
+#### Examine mapping results in R
+I ran summary stats for sorted bams (.pe.sorted.bam) and filtered bams (.pe.sorted.filtered.bam)
+```{r}
+# Read in mapping summary data
+msumA <- read.table("~/Documents/crayfish_lab/RSCseq2022/mapSummary_seq2022.3.txt")
+
+# Clean up sample names
+colnames(msumA) <- c("Sample", "QCpassedReads", "primary", "secondary", "supplementary", "duplicates", "primaryDuplicates", "mapped", "primaryMapped", "paired", "read1", "read2", "properlyPaired", "itselfYmateMapped", "singletons", "mateMappedDiffChr", "mateMappedDiffChr_mapQ5")
+
+nothanks <- c("a", "b", "c", "d", "e", "f", "g", "h")
+msum <- msumA %>% separate(Sample, c("a", "b", "c", "d", "e", "f", "g", "h", "i"), sep = "/") %>% select(-nothanks) %>%
+  separate(i, c("Sample", "stuff"), sep = "_") %>% select(-stuff)
+
+# Calculate percentages
+msum$percentMap <- (msum$mapped/msum$QCpassedReads)*100
+msum$percentPaired <- (msum$properlyPaired/msum$paired)*100
+msum$percentSingle <- (msum$singletons/msum$properlyPaired)*100
+
+
+# Assign species labels
+other_sp <- c("Cfod", "Ctho", "Fprop", "Fvir", "Lpol", "Pacu")
+pattern <- paste(other_sp, collapse = "|")
+
+msum <- msum %>%
+  mutate(
+    species = if_else(
+      str_detect(Sample, pattern),
+      "OtherSpecies",
+      "Pclarkii"
+    )
+  ) %>%
+  mutate(
+    species = factor(species, levels = c("Pclarkii", "OtherSpecies"))) %>%
+  filter(!Sample == "empty")
+
+# Summary by species (P. clarkii vs other species)
+msum_species_summary <- msum %>%
+  group_by(species) %>%
+  summarise(
+    n_samples = n(),
+    meanPercentMap = mean(percentMap, na.rm = TRUE),
+    sdPercentMap = sd(percentMap, na.rm = TRUE),
+    meanPercentPaired = mean(percentPaired, na.rm = TRUE),
+    sdPercentPaired = sd(percentPaired, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+
+kable(msum_species_summary, digits = 2, 
+      caption = "Mapping summary: P. clarkii vs Other Species") %>% 
+  kable_styling()
+
+
+# Create histogram
+msum.p <- ggplot(msum, aes(x = percentMap, fill = species)) +
+  geom_histogram(color = "gray40", alpha = 0.7, position = "identity", bins = 30) +
+  facet_wrap(~species, ncol = 1, scales = "free_y") +
+  labs(
+    title = "Distribution of Mapping Percentages",
+    x = "Percent Mapped",
+    y = "Count",
+    fill = "Species"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+msum.p
+```
+
+&nbsp;
+&nbsp;
+
+### Read counts
+(.../RedSwampCrayfish/seq2022/scripts/12_countReads_NEA.sh)
+```{bash, eval=FALSE}
+#!/bin/sh 
+#SBATCH --nodes=1-4
+#SBATCH --ntasks=8
+#SBATCH -t 1:00:00
+#SBATCH --cpus-per-task=4
+#SBATCH --mem-per-cpu=8G
+#SBATCH -J Count_reads
+#SBATCH -o /mnt/home/adamsn23/RedSwampCrayfish/seq2022/QSTAT/Count_reads.o
+#SBATCH --error /mnt/home/adamsn23/RedSwampCrayfish/seq2022/QSTAT/Count_reads.err
+
+#==================================================================================================
+#   File: Count_reads.sh
+#   Date: 04/22/19, 03/11/2022 (NEA), 07/05/2022 (NEA)
+#   Description: Flip the orientation of the Best RAD reads
+#       Run: Interactively - array
+#--------------------------------------------------------------------------------------------------
+#       Authors: Jared Homola, Seth Smith, Nicole Adams
+#==================================================================================================
+
+#Define alias for project root directory
+RUN_PATH=/mnt/home/adamsn23/RedSwampCrayfish/seq2022
+SCR=/mnt/gs18/scratch/users/adamsn23/RSC/seq2022
+
+cd $RUN_PATH/SHELL
+
+touch $RUN_PATH/OUT/Read_counts.txt
+
+# old way
+#ls $SCR/RSC/trimmed/paired | grep "fq" | grep -v ".2.fq.gz" | grep -v "rem" | awk -F "." '{print $1}' | sort | uniq | while read -r LINE
+#do
+#   echo $LINE >> $RUN_PATH/OUT/Read_counts.txt
+#   zcat $SCR/RSC/trimmed/paired/$LINE.1.fq.gz | echo $((`wc -l`/4)) >> #$RUN_PATH/OUT/Read_counts.txt
+#done 
+
+# new way, puts name and number on same line
+ls $SCR/trimmed/paired | grep "fq" | grep -v ".2.fq.gz" | grep -v "rem" | awk -F "." '{print $1}' | sort | uniq | while read -r LINE 
+do 
+ind=$(echo $LINE) 
+dat=$(zcat $SCR/trimmed/paired/$LINE.1.fq.gz | echo $((`wc -l`/4))) 
+echo $ind $dat >> $RUN_PATH/OUT/Read_counts.txt 
+done  
+
+```
+
+&nbsp;
+
+### Examine read counts in R
+```{r}
+counts.a <- as.data.frame(read.delim("~/Documents/crayfish_lab/RSCseq2022/Read_counts.txt", header = FALSE))
+
+counts.b <- counts.a %>% separate(V1, into = c("ind", "reads"), sep = " ") %>%
+  separate(ind, into = c("ind", "stuff"), sep = "_") %>% select(-stuff)
+
+# some samples are present twice in the file... so remove them
+counts.c <- counts.b %>% distinct(ind, .keep_all = T)
+
+# add in pop names and remove empty
+counts <- counts.c %>% mutate(pop = ind) %>% separate(pop, into = c("pop", "extra"), sep = "-") %>% select(-extra) %>% filter(!ind == "empty") %>% mutate(reads= as.numeric(reads))
+
+
+# identify low read samples:
+qts <- quantile(counts$reads,probs=c(.05,.95))
+
+counts.p <- ggplot(counts, aes(x=reads)) +
+  geom_histogram() +
+  geom_vline(xintercept = qts[1], color="red", linetype="dashed") +
+  geom_vline(xintercept = qts[2], color="red", linetype="dashed") +
+  theme_minimal() +
+  theme(text = element_text(size = 16)) 
+
+# identify low read samples:
+low.counts <- counts %>% filter(reads < qts[1]) %>% arrange(reads)
+
+no_low <- dim(low.counts)[1]
+
+low.counts %>% dplyr::select(ind, reads) %>% kbl(
+  caption = paste0("Samples with Low Read Counts (N=", no_low, ")"), # Add a title
+  col.names = c("Individual ID", "Read Count"), # Clean column names
+  align = 'c',
+  format = "html")  %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed"), # Popular styling options
+    full_width = T)
+```

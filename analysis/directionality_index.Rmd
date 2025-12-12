@@ -1,0 +1,731 @@
+---
+title: "Directionality index of P. clarkii in SE MI"
+author: "Nicole Adams"
+date: "2025-05-06"
+output: 
+  html_document:
+    toc: true
+    code_folding: show
+---
+
+```{r setup, include=FALSE, echo=TRUE}
+# Chunk defaults
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  fig.height = 6,
+  fig.width = 8
+)
+
+# Project root for KNIT (applies to all chunks)
+root <- normalizePath("~/Documents/crayfish_lab/RedSwampCrayfish_geneFlow", mustWork = TRUE)
+knitr::opts_knit$set(root.dir = root)
+
+# For interactive running in RStudio only
+if (interactive()) setwd(root)
+
+# Load packages
+library(tidyverse)
+library(RColorBrewer)
+library(reshape2)
+library(rangeExpansion)
+library(snpStats)
+library(sp)
+library(geosphere)
+library(grid)
+library(gridExtra)
+library(ggpubr)
+
+# Source functions
+source("sensitive/population_name_functions.R")
+
+# Sanity check (helpful while debugging)
+cat("Knit root.dir:", knitr::opts_knit$get("root.dir"), "\n")
+cat("getwd():      ", getwd(), "\n")
+
+
+```
+
+# Estimating the directionality index of RSC sequences from Homola and Adams
+Code to evaluate gene flow using the directionality index, $\psi$, (Peter & Slatkin, 2013) for RSC.<br>
+For details on sequence data processing see dataProcessing_fastq2bams_Sard-Homola.Rmd and dataProcessing_fastq2bams_Adams.Rmd for steps taken prior to genotyping. For genotyping details see genotyping_filtering.Rmd<br>
+
+#### Functions to subset matrix
+```{r}
+
+  get_lower_tri<-function(psi2.o){
+    psi2.o[upper.tri(psi2.o)] <- NA
+    return(psi2.o)
+  }
+  
+  get_upper_tri <- function(data2){
+  data2[lower.tri(data2)]<- NA
+  return(data2)
+}
+ 
+```
+
+&nbsp;
+
+## Reformat data in Plink
+```{bash}
+module load PLINK/2.00a_10.2-x86_64
+
+mkdir /rangeExpansion/
+
+plink2 --vcf ../jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.ab_1pRt_100kb.recode.vcf --set-missing-var-ids "@_#" --make-bed --out jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.ab_1pRt_100kb_4re --allow-extra-chr
+```
+
+&nbsp;
+
+## Load in spatial data and clean up
+```{r}
+# create coordinate file
+rsc.latlong <- read.csv("sensitive/RSC_infestations_2022_05_27_annon.csv")
+rsc.latlong <- rsc.latlong %>% dplyr::select(c(Lat, Long, waterbody)) 
+
+
+fs.fam <- read.delim("data/jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.ab_1pRt_100kb.fam", header = F)
+fs.fam2 <- fs.fam %>% mutate(indiv=V2) %>%
+  separate(col = V2,into = c("pop","b"),sep = "-") %>%
+  dplyr::select(-c(b, V1, V3, V4, V5, V6)) 
+
+
+fs.fam2 <- fs.fam2 %>% mutate(waterbody=pop)
+
+# fix names
+fs.fam2$indiv <- gsub("FC815-212", "FC8-15-212", fs.fam2$indiv)
+fs.fam2$waterbody <- convert_pop_names(fs.fam2$waterbody)
+fs.fam2$pop <- convert_pop_names(fs.fam2$pop)
+
+fs.fam3 <- left_join(fs.fam2, rsc.latlong)
+fs.fam3 <- fs.fam3 %>% dplyr::select(c(indiv, Long, Lat, waterbody)) %>% rename(id=indiv, longitude=Long, latitude=Lat, pop=waterbody)
+
+# Remove pops w N<5
+Ntabx <- as.data.frame(table(fs.fam3$pop))
+Ntab2x <- Ntabx %>% filter(Freq > 4)
+fs.fam4 <- fs.fam3 %>% filter(pop %in% Ntab2x$Var1)
+
+# define groups
+fs.fam4$region <- case_when(
+  fs.fam4$pop %in% c("Drain1") ~ "Group5",
+  fs.fam4$pop %in% c("Apt1", "Apt2", "Apt3") ~ "Group1",
+  fs.fam4$pop %in% c("WestGC1", "WestGC2", "WestGC3", "WestGC6", "Hotel5") ~ "Group2_WestGC",
+  fs.fam4$pop %in% c("Hotel1", "Hotel2", "Hotel3", "Hotel4") ~ "Group2_Hotel",
+  fs.fam4$pop %in% c("EastGC11", "EastGC10", "EastGC7", "EastGC13", "EastGC1", "EastGC9") ~ "Group3_EastGC_SW",
+  fs.fam4$pop %in% c("EastGC2","EastGC3", "EastGC4") ~ "Group3_EastGC_NE",
+  fs.fam4$pop %in% c("Private1") ~ "Group4",
+  TRUE ~ NA_character_
+)
+
+#write.table(fs.fam4, "sensitive/directionality_index/rsc_coords4rangeExpansion_N5.txt", sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
+
+coord.file <- load.coord.file("sensitive/directionality_index/rsc_coords4rangeExpansion_N5.txt")
+```
+
+&nbsp;
+
+## Load in genetic data from Plink
+```{r}
+# bed file from Plink
+snp.file <- load.plink.file("data/directionality_index/jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.ab_1pRt_100kb_4re.bed")   ## you have to have full path, it didn't work with "~/"
+
+rownames(snp.file$genotypes) <- gsub("FC815-212", "FC8-15-212", rownames(snp.file$genotypes))
+rownames(snp.file$fam) <- gsub("FC815-212", "FC8-15-212", rownames(snp.file$fam))
+snp.file$fam$member <- gsub("FC815-212", "FC8-15-212", snp.file$fam$member)
+snp.file$fam <- snp.file$fam %>% filter(member %in% fs.fam4$id)
+
+                                       
+ploidy <- 2 #diploid individuals
+region <- list(NULL,c("Group1", "Group2_WestGC", "Group2_Hotel", "Group3_SW", "Group3_NE", "Group4", "Group5"))
+
+
+#raw.data <- load.data(snp.file, coord.file, ploidy=ploidy)
+raw.data2 <- check.missing(snp.file, coord.file)
+raw.data2$coords$pop <- convert_pop_names(raw.data2$coords$pop)
+
+```
+
+&nbsp;
+
+## Run Range Expansion to calculate directionality index -- all
+```{r}
+pop <- make.pop(raw.data2, ploidy)
+#psi <- get.all.psi(pop) # takes a long time to run
+
+# Get population names in the correct order
+pop_names <- pop$coords$pop
+
+psi <- read.table("data/directionality_index/rangeExp.psi_20251203.txt")
+
+# Assign to psi matrix
+rownames(psi) <- pop_names
+colnames(psi) <- pop_names
+
+#write.table(psi, file="data/directionality_index/rangeExp.psi_20251203.txt", col.names = T, row.names= T, quote = F)
+
+
+
+results <- run.regions(psi=psi, region=region, pop=pop, xlen=10, ylen=20) 
+
+P1.sum <- summary.origin.results(results$tbl[[1]])
+P2.sum <- summary.origin.results(results$tbl[[2]])
+#P3.sum <- summary.origin.results(results$tbl[[3]])
+
+```
+
+&nbsp;
+
+Note:<br>
+Positive psi = pop1 is further away from the origin of the expansion than pop2. (pop1 is sink, pop2 is source)<br>
+Psi 0 = pops are similar distance from origin.<br>
+Negative psi = expansion from pop1 to pop2 bc pop further away from origin is supposed to experience more drift (higher allele freq) (pop1 is source, pop2 is sink)<br>
+
+&nbsp;
+
+## Plot the directionality index -- all
+Figure S5A
+
+&nbsp;
+
+### Plot psi matrix as heatmap
+Figure S5A
+```{r Figure S5A}
+myCol <- brewer.pal(n = 10, name = 'Paired')
+
+psi2 <- psi
+psi.melt <- melt(as.matrix(psi2))
+
+psi.melt <- psi.melt %>% mutate(across(c(value), round, 3))
+
+# ID pairs with psi >|0.5|
+psiHi <- psi.melt %>% filter(value >0.5|value < -0.5) #N=70
+
+
+# Get lower triangle of the correlation matrix
+psi.col.order <- c("Apt1", "Apt2", "Apt3", "WestGC1", "WestGC2", "WestGC6", "Hotel1", "Hotel2", "Hotel3", "Hotel4", "EastGC1", "EastGC7",  "EastGC10","EastGC11", "EastGC13", "EastGC2", "EastGC3", "EastGC4", "Private1", "Drain1")
+
+# Step 1: Reorder columns
+psi2.o <- psi2[ , psi.col.order]
+# Step 2: Reorder rows
+psi2.o <- psi2.o[psi.col.order , ]
+
+psi.lTri <- get_lower_tri(psi2.o)
+psi.lTri.melt <- melt(as.matrix(psi.lTri), na.rm=TRUE)
+psi.lTri.melt <- psi.lTri.melt %>% mutate(across(c(value), round, 3))
+
+psi.heat2 <- ggplot(data = psi.lTri.melt, aes(x=Var1, y=Var2, fill=value)) + 
+  geom_tile() +
+  #geom_text(aes(label = value), color="black", size = 3) +
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+   midpoint = 0, limit = c(-1,1), name=expression(psi)) +
+  theme_minimal() +
+  theme(text = element_text(size = 22), axis.text.x = element_text(angle = 90), axis.title.x = element_blank(), axis.title.y = element_blank())
+
+# Add color bars for genetic groups
+psi.gp = ggplotGrob(psi.heat2)
+psi_g1 <- grobTree(
+                  linesGrob(unit(c(.10, .21), "npc"), unit(1, "npc"), # grp1
+                            gp = gpar(col = myCol[8], lwd = 8)),
+                  linesGrob(unit(c(.23, .34), "npc"), unit(1, "npc"), # grp2_WestGC 
+                            gp = gpar(col = myCol[1], lwd = 8)),
+                  linesGrob(unit(c(.36, .50), "npc"), unit(1, "npc"), # grp2_hotel
+                            gp = gpar(col = myCol[2], lwd = 8)),
+                  linesGrob(unit(c(.52, .71), "npc"), unit(1, "npc"), # grp3_SW
+                            gp = gpar(col = myCol[3], lwd = 8)),
+                  linesGrob(unit(c(.725, .84), "npc"), unit(1, "npc"), # grp3_NE
+                            gp = gpar(col = myCol[4], lwd = 8)),
+                  linesGrob(unit(c(.855, .875), "npc"), unit(1, "npc"), # grp4
+                            gp = gpar(col = myCol[6], lwd = 8)),
+                  linesGrob(unit(c(.895, .915), "npc"), unit(1, "npc"), # grp5
+                            gp = gpar(col = myCol[9], lwd = 8)),
+                  textGrob("Group 1",x=.1,hjust=0,
+                           gp=gpar(col="black",fontsize=12)),
+                  textGrob("2",x=.345,hjust=0,
+                           gp=gpar(col="black",fontsize=12)),
+                  textGrob("3",x=.717,hjust=0,
+                           gp=gpar(col="black",fontsize=12)),
+                  textGrob("4",x=.863,hjust=0,
+                           gp=gpar(col="black",fontsize=12)),
+                  textGrob("5",x=.905,hjust=0,
+                           gp=gpar(col="black",fontsize=12)))
+
+#Plot All Together
+all.psi.plot <- gridExtra::grid.arrange(psi.heat2, psi_g1, heights=c(11,0.9))
+grid.draw(all.psi.plot)
+```
+
+&nbsp;
+
+## Calculate Z scores -- all
+```{r}
+# Calc a Z score and add to matrix
+psi.lTri.melt$zScore <- (psi.lTri.melt$value - mean(psi.lTri.melt$value))/sd(psi.lTri.melt$value)
+#range(psi.lTri.melt$zScore) # -1.829104  2.499135
+psi.lTri.melt %>% filter(zScore >1 | zScore < -1) # N=70 out of 210 total pairs
+psi.lTri.melt %>% filter(zScore >1.5 | zScore < -1.5) # N=29 out of 210 total pairs
+psi.lTri.melt %>% filter(zScore >2.0 | zScore < -2.0) # N=15 out of 210 total pairs
+psi.lTri.melt %>% filter(zScore >2.5 | zScore < -2.5) # N=0
+
+psi.lTri.melt <- psi.lTri.melt %>% mutate(across(c(zScore), round, 3))
+
+# save z-scores
+write.table(psi.lTri.melt, file="output/directionality_index_output/rangeExp.psi_zscores_all.txt", col.names = T, row.names= F, quote = F)
+
+# make matrix, mirror lower with upper, then take only upper
+zScore.mat <- xtabs(zScore ~ Var1 + Var2, data=psi.lTri.melt)
+zScore.mat2 <- t(zScore.mat)[,-nrow(zScore.mat)] 
+zScore.mat[upper.tri(zScore.mat)] <- zScore.mat2[upper.tri(zScore.mat2)]
+
+zScore.mat.u <- get_upper_tri(zScore.mat)
+
+# Create logical matrices indicating upper and lower triangles
+upper_logical <- upper.tri(zScore.mat.u)
+lower_logical <- lower.tri(psi.lTri)
+psi.lTri <- round(psi.lTri, 3)
+
+# Create combined matrix
+combined_matrix <- matrix(0, nrow = nrow(zScore.mat.u), ncol = ncol(psi.lTri))
+
+# Fill upper triangle
+combined_matrix[upper_logical] <- zScore.mat.u[upper_logical]
+
+# Fill lower triangle
+combined_matrix[lower_logical] <- psi.lTri[lower_logical]
+
+# add names
+colnames(combined_matrix) <- colnames(psi.lTri)
+rownames(combined_matrix) <- rownames(psi.lTri)
+
+# a Z-score of 1.2 shows that your observed value is 1.2 standard deviations from the mean. A Z-score of 2.5 means your observed value is 2.5 standard deviations from the mean and so on. The closer your Z-score is to zero, the closer your value is to the mean. The further away your Z-score is from zero, the further away your value is from the mean. A positive Z-score shows that your value lies above the mean, while a negative Z-score shows that your value lies below the mean. (https://articles.outlier.org/z-score-formula-examples-and-how-to-interpret)
+```
+
+&nbsp;
+&nbsp;
+
+## Group 1 
+### Reformat data -- Group1
+```{bash}
+cd /mnt/home/adamsn23/RedSwampCrayfish/jaredYseq2022/OUT/genotyped2/plinkAnalyses
+awk '{ print $2 }' jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.ab_1pRt_100kb.fam | grep -E "ROW|BB|SC" > jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.ab_1pRt_100kb_grp1.ids.txt 
+
+# make a vcf with MB+SHD
+cd /mnt/home/adamsn23/RedSwampCrayfish/jaredYseq2022/OUT/genotyped2/
+
+module load GCC/7.3.0-2.30 OpenMPI/3.1.1 VCFtools/0.1.15-Perl-5.28.0
+
+vcftools --vcf jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.ab_1pRt_100kb.recode.vcf --keep plinkAnalyses/jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.ab_1pRt_100kb_grp1.ids.txt --recode --recode-INFO-all --out jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.ab_1pRt_100kb.grp1   
+
+# kept 42 out of 763 Individuals, kept 2675 out of a possible 2675 Sites
+
+cd /mnt/home/adamsn23/RedSwampCrayfish/jaredYseq2022/OUT/genotyped2/rangeExpansion/
+
+module load PLINK/2.00a_10.2-x86_64
+
+plink2 --vcf ../jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.ab_1pRt_100kb.grp1.recode.vcf --set-missing-var-ids "@_#" --make-bed --out jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.ab_1pRt_100kb.grp1_4re --allow-extra-chr
+```
+
+&nbsp;
+
+### Create coordinate file and read in genetic data -- Group1
+```{r}
+# create coordinate file
+G1.fam <- read.delim("data/directionality_index/jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.ab_1pRt_100kb.grp1_4re.fam", header = F)
+G1.fam2 <- G1.fam %>% mutate(indiv=V2) %>%
+  separate(col = V2,into = c("pop","b"),sep = "-") %>%
+  dplyr::select(-c(b, V1, V3, V4, V5, V6)) 
+
+
+G1.fam2 <- G1.fam2 %>% mutate(waterbody=pop)
+
+# fix names
+G1.fam2$waterbody <- convert_pop_names(G1.fam2$waterbody)
+G1.fam2$pop <- convert_pop_names(G1.fam2$pop)
+
+G1.fam3 <- left_join(G1.fam2, rsc.latlong)
+G1.fam3 <- G1.fam3 %>% dplyr::select(c(indiv, Long, Lat, waterbody)) %>% rename(id=indiv, longitude=Long, latitude=Lat, pop=waterbody)
+
+# Remove pops w N<5 -- none
+G1.Ntab <- as.data.frame(table(G1.fam3$pop))
+G1.Ntab2 <- G1.Ntab %>% filter(Freq > 4)
+G1.fam4 <- G1.fam3 %>% filter(pop %in% G1.Ntab2$Var1)
+
+
+G1.fam4$region <- ifelse(G1.fam4$pop %in% c("Apt1"), "REGION_1", "foo")
+G1.fam4$region <- ifelse(G1.fam4$pop %in% c("Apt3", "Apt2"), "REGION_2", G1.fam4$region)
+
+write.table(G1.fam4, "sensitive/directionality_index/rsc_Grp1_coords4rangeExpansion.txt", sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
+
+G1.coord.file <- load.coord.file("sensitive/directionality_index/rsc_Grp1_coords4rangeExpansion.txt")
+  
+  
+# bed file from Plink
+G1.snp.file <- load.plink.file("data/directionality_index/jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.ab_1pRt_100kb.grp1_4re.bed")
+
+ploidy <- 2 #diploid individuals
+G1.region <- list(NULL,c("REGION_1", "REGION_2"))
+
+G1.raw.data2 <- check.missing(G1.snp.file, G1.coord.file)
+```
+
+&nbsp;
+
+### Run Range Expansion and plot -- Group1
+Figure S5B
+```{r Figure S5B}
+G1.pop <- make.pop(G1.raw.data2, ploidy)
+G1.psi <- get.all.psi(G1.pop)
+
+write.table(G1.psi, file="output/directionality_index_output/rangeExp.G1.psi.txt", col.names = F, row.names= F, quote = F)
+
+
+G1.results <- run.regions(psi=G1.psi, region=G1.region, pop=G1.pop, xlen=10, ylen=20) 
+
+G1.P1.sum <- summary.origin.results(G1.results$tbl[[1]])
+G1.P2.sum <- summary.origin.results(G1.results$tbl[[2]])
+
+
+# plot psi matrix as heatmap
+G1.psi2 <- G1.psi
+colnames(G1.psi2) <- G1.pop$coords$pop
+rownames(G1.psi2) <- G1.pop$coords$pop
+
+G1.psi.melt <- melt(G1.psi2)
+
+G1.psi.melt <- G1.psi.melt %>%  mutate(Var1 = fct_relevel(Var1, "Apt1", "Apt3", "Apt2")) %>% mutate(Var2 = fct_relevel(Var2, "Apt1", "Apt3", "Apt2"))
+
+G1.psi.melt <-  G1.psi.melt %>% mutate(across(c(value), round, 3))
+
+# Get lower triangle of the correlation matrix
+ G1.psi.col.order <- c("Apt1",  "Apt2", "Apt3")
+
+G1.psi2.o <- G1.psi2[ , G1.psi.col.order]
+G1.psi2.o <- G1.psi2.o[G1.psi.col.order , ]
+
+ 
+G1.psi.lTri <- get_lower_tri(G1.psi2.o)
+G1.psi.lTri.melt <- melt(G1.psi.lTri, na.rm=TRUE)
+G1.psi.lTri.melt <-  G1.psi.lTri.melt %>% mutate(across(c(value), round, 3))
+
+G1.psi.heat2 <- ggplot(data = G1.psi.lTri.melt, aes(x=Var1, y=Var2, fill=value)) + 
+  geom_tile(color="gray") +
+  #geom_text(aes(label = value), color="black", size = 3) +
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+   midpoint = 0, limit = c(-1,1), name=expression(psi)) +
+  #theme_minimal() +
+  theme_classic() +
+  theme(text = element_text(size = 22), axis.text.x = element_text(angle = 90), axis.title.x = element_blank(), axis.title.y = element_blank())
+
+```
+
+&nbsp;
+
+### Calculate Z scores -- Group1
+```{r}
+# Calc a Z score and add to matrix
+
+G1.psi.lTri.melt$zScore <- (G1.psi.lTri.melt$value - mean(G1.psi.lTri.melt$value))/sd(G1.psi.lTri.melt$value)
+#range(G1.psi.lTri.melt$zScore) # -1.6452207  0.7662276
+
+G1.psi.lTri.melt <- G1.psi.lTri.melt %>% mutate(across(c(zScore), round, 3))
+
+write.table(G1.psi.lTri.melt, file="output/directionality_index_output/rangeExp.psi_zscores_grp1.txt", col.names = T, row.names= F, quote = F)
+
+# make matrix, mirror lower with upper, then take only upper
+G1.zScore.mat <- xtabs(zScore ~ Var1 + Var2, data=G1.psi.lTri.melt)
+
+G1.zScore.mat
+```
+
+&nbsp;
+&nbsp;
+
+## Group 2
+### Reformat data -- Group2
+```{bash}
+# make a vcf with Hotel+WestGC
+cd /mnt/home/adamsn23/RedSwampCrayfish/jaredYseq2022/OUT/genotyped2/plinkAnalyses
+cat jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.ab_1pRt_100kb_grp2westgc.ids.txt jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.ab_1pRt_100kb_grp2hotel.ids.txt > jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.ab_1pRt_100kb_grp2.ids.txt
+
+cd /mnt/home/adamsn23/RedSwampCrayfish/jaredYseq2022/OUT/genotyped2/
+
+module load GCC/7.3.0-2.30 OpenMPI/3.1.1 VCFtools/0.1.15-Perl-5.28.0 BCFtools
+
+vcftools --vcf jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.ab_1pRt_100kb.recode.vcf --keep plinkAnalyses/jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.ab_1pRt_100kb_grp2.ids.txt --recode --recode-INFO-all --out jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.ab_1pRt_100kb.grp2   
+
+# kept 332 out of 763 Individuals, kept 2675 out of a possible 2675 Sites
+
+cd /mnt/home/adamsn23/RedSwampCrayfish/jaredYseq2022/OUT/genotyped2/rangeExpansion/
+
+module load PLINK/2.00a_10.2-x86_64
+
+plink2 --vcf ../jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.ab_1pRt_100kb.grp2.recode.vcf --set-missing-var-ids "@_#" --make-bed --out jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.ab_1pRt_100kb.grp2_4re --allow-extra-chr
+```
+
+&nbsp;
+
+### Create coordinate file and read in genetic data -- Group2
+```{r}
+# create coordinate file
+G2.fam <- read.delim("data/directionality_index/jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.ab_1pRt_100kb.grp2_4re.fam", header = F)
+G2.fam2 <- G2.fam %>% mutate(indiv=V2) %>%
+  separate(col = V2,into = c("pop","b"),sep = "-") %>%
+  dplyr::select(-c(b, V1, V3, V4, V5, V6)) 
+
+
+G2.fam2 <- G2.fam2 %>% mutate(waterbody=pop)
+
+# fix names
+G2.fam2$waterbody <- gsub("MB2a", "MB2", G2.fam2$waterbody)
+G2.fam2$waterbody <- convert_pop_names(G2.fam2$waterbody)
+G2.fam2$pop <- convert_pop_names(G2.fam2$pop)
+
+G2.fam3 <- left_join(G2.fam2, rsc.latlong)
+G2.fam3 <- G2.fam3 %>% dplyr::select(c(indiv, Long, Lat, waterbody)) %>% rename(id=indiv, longitude=Long, latitude=Lat, pop=waterbody)
+
+# Remove pops w N<5
+G2.Ntab <- as.data.frame(table(G2.fam3$pop))
+G2.Ntab2 <- G2.Ntab %>% filter(Freq > 4)
+G2.fam4 <- G2.fam3 %>% filter(pop %in% G2.Ntab2$Var1)
+
+# define region groups
+G2.fam4$region <- case_when(
+  G2.fam4$pop %in% c("WestGC1", "WestGC2", "WestGC3", "WestGC6", "Hotel5") ~ "Group2_WestGC",
+  G2.fam4$pop %in% c("Hotel1", "Hotel2", "Hotel3", "Hotel4") ~ "Group2_Hotel",
+  TRUE ~ NA_character_
+)
+
+G2.fam4$region <- ifelse(G2.fam4$pop %in% c("MB1", "MB2", "AUB"), "Group2_MB", "foo")
+G2.fam4$region <- ifelse(G2.fam4$pop %in% c("SHD", "TB", "HO1", "HO2"), "Group2_SHD", G2.fam4$region)
+
+write.table(G2.fam4, "sensitive/directionality_index/rsc_Grp2_coords4rangeExpansion.txt", sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
+
+G2.coord.file <- load.coord.file("sensitive/directionality_index/rsc_Grp2_coords4rangeExpansion.txt")
+  
+  
+# bed file from Plink
+G2.snp.file <- load.plink.file("data/directionality_index/jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.ab_1pRt_100kb.grp2_4re.bed")
+
+ploidy <- 2 #diploid individuals
+G2.region <- list(NULL,c("Group2_WestGC", "Group2_Hotel"))
+
+G2.raw.data2 <- check.missing(G2.snp.file, G2.coord.file)
+
+```
+
+&nbsp;
+
+### Run Range Expansion and plot -- Group2
+Figure S5C
+```{r Figure S5C}
+G2.pop <- make.pop(G2.raw.data2, ploidy)
+G2.psi <- get.all.psi(G2.pop)
+
+write.table(G2.psi, file="output/directionality_index_output/rangeExp.G2.psi.txt", col.names = F, row.names= F, quote = F)
+
+
+G2.results <- run.regions(psi=G2.psi, region=G2.region, pop=G2.pop, xlen=10, ylen=20) 
+
+G2.P1.sum <- summary.origin.results(G2.results$tbl[[1]])
+G2.P2.sum <- summary.origin.results(G2.results$tbl[[2]])
+
+
+# plot psi matrix as heatmap
+G2.psi2 <- G2.psi
+colnames(G2.psi2) <- G2.pop$coords$pop
+rownames(G2.psi2) <- G2.pop$coords$pop
+
+G2.psi.melt <- melt(G2.psi2)
+
+G2.psi.melt <- G2.psi.melt %>%  mutate(Var1 = fct_relevel(Var1, "WestGC1", "WestGC2", "WestGC6", "Hotel1", "Hotel2", "Hotel3", "Hotel4")) %>%  mutate(Var2 = fct_relevel(Var2, "WestGC1", "WestGC2", "WestGC6", "Hotel1", "Hotel2", "Hotel3", "Hotel4"))
+
+G2.psi.melt <-  G2.psi.melt %>% mutate(across(c(value), round, 3))
+
+
+# Get lower triangle of the correlation matrix
+G2.psi.col.order <- c("WestGC1", "WestGC2", "WestGC6", "Hotel1", "Hotel2", "Hotel3", "Hotel4")
+
+G2.psi2.o <- G2.psi2[ , G2.psi.col.order]
+G2.psi2.o <- G2.psi2.o[G2.psi.col.order , ]
+ 
+G2.psi.lTri <- get_lower_tri(G2.psi2.o)
+G2.psi.lTri.melt <- melt(G2.psi.lTri, na.rm=TRUE)
+G2.psi.lTri.melt <- G2.psi.lTri.melt %>% mutate(across(c(value), round, 3))
+
+G2.psi.heat2 <- ggplot(data = G2.psi.lTri.melt, aes(x=Var1, y=Var2, fill=value)) + 
+  geom_tile(color="gray") +
+  #geom_text(aes(label = value), color="black", size = 3) +
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+   midpoint = 0, limit = c(-1,1), name=expression(psi)) +
+  #theme_minimal() +
+  theme_classic() +
+  theme(text = element_text(size = 22), axis.text.x = element_text(angle = 90), axis.title.x = element_blank(), axis.title.y = element_blank())
+
+```
+
+&nbsp;
+
+### Calculate Z scores -- Group2
+```{r}
+# Calc a Z score and add to matrix
+G2.psi.lTri.melt$zScore <- (G2.psi.lTri.melt$value - mean(G2.psi.lTri.melt$value))/sd(G2.psi.lTri.melt$value)
+#range(G2.psi.lTri.melt$zScore) # -1.478669  1.335860
+
+G2.psi.lTri.melt <- G2.psi.lTri.melt %>% mutate(across(c(zScore), round, 3))
+
+write.table(G2.psi.lTri.melt, file="output/directionality_index_output/rangeExp.psi_zscores_grp2.txt", col.names = T, row.names= F, quote = F)
+
+# make matrix, mirror lower with upper, then take only upper
+G2.zScore.mat <- xtabs(zScore ~ Var1 + Var2, data=G2.psi.lTri.melt)
+
+G2.zScore.mat
+```
+
+&nbsp;
+&nbsp;
+
+## Group 3
+### Reformat data -- Group3
+```{bash}
+cd /mnt/home/adamsn23/RedSwampCrayfish/jaredYseq2022/OUT/genotyped2/rangeExpansion
+
+module load PLINK/2.00a_10.2-x86_64
+
+plink2 --vcf ../jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.ab_1pRt_100kb.grp3.recode.vcf --set-missing-var-ids "@_#" --make-bed --out jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.ab_1pRt_100kb.grp3_4re --allow-extra-chr
+```
+
+&nbsp;
+
+### Create coordinate file and read in genetic data -- Group3
+```{r}
+G3.fam <- read.delim("data/directionality_index/jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.ab_1pRt_100kb.grp3_4re.fam", header = F)
+
+G3.fam2 <- G3.fam %>% mutate(indiv=V2) %>%
+  separate(col = V2,into = c("pop","b"),sep = "-") %>%
+  dplyr::select(-c(b, V1, V3, V4, V5, V6)) 
+
+
+G3.fam2 <- G3.fam2 %>% mutate(waterbody=pop)
+
+# fix names
+G3.fam2$indiv <- gsub("FC815-212", "FC8-15-212", G3.fam2$indiv)
+G3.fam2$waterbody <- convert_pop_names(G3.fam2$waterbody)
+G3.fam2$pop <- convert_pop_names(G3.fam2$pop)
+
+G3.fam3 <- left_join(G3.fam2, rsc.latlong)
+G3.fam3 <- G3.fam3 %>% dplyr::select(c(indiv, Long, Lat, waterbody)) %>% rename(id=indiv, longitude=Long, latitude=Lat, pop=waterbody)
+
+# Remove pops w N<5
+G3.Ntab <- as.data.frame(table(G3.fam3$pop))
+G3.Ntab2 <- G3.Ntab %>% filter(Freq > 4)
+G3.fam4 <- G3.fam3 %>% filter(pop %in% G3.Ntab2$Var1)
+
+# define regions
+G3.fam4$region <- case_when(
+  G3.fam4$pop %in% c("EastGC11", "EastGC10", "EastGC7", "EastGC13", "EastGC1", "EastGC9") ~ "Group3_EastGC_SW",
+  G3.fam4$pop %in% c("EastGC2", "EastGC3", "EastGC4") ~ "Group3_EastGC_NE",
+  TRUE ~ NA_character_
+)
+
+write.table(G3.fam4, "sensitive/directionality_index/rsc_Grp3_coords4rangeExpansion_N5.txt", sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
+
+G3.coord.file <- load.coord.file("sensitive/directionality_index/rsc_Grp3_coords4rangeExpansion_N5.txt")
+  
+  
+# bed file from Plink
+G3.snp.file <- load.plink.file("data/directionality_index/jy22_adults_baseFilter_imiss99_miss45.imiss70_hz.ab_1pRt_100kb.grp3_4re.bed")
+
+# fix names
+rownames(G3.snp.file$genotypes) <- gsub("FC815-212", "FC8-15-212", rownames(G3.snp.file$genotypes))
+rownames(G3.snp.file$fam) <- gsub("FC815-212", "FC8-15-212", rownames(G3.snp.file$fam))
+G3.snp.file$fam$member <- gsub("FC815-212", "FC8-15-212", G3.snp.file$fam$member)
+
+ploidy <- 2 #diploid individuals
+G3.region <- list(NULL,c("Group3_EastGC_SW", "Group3_EastGC_NE"))
+
+
+G3.raw.data2 <- check.missing(G3.snp.file, G3.coord.file)
+
+```
+
+&nbsp;
+
+### Run Range Expansion and plot -- Group3
+Figure S5D
+```{r Figure S5D}
+G3.pop <- make.pop(G3.raw.data2, ploidy)
+G3.psi <- get.all.psi(G3.pop)
+
+write.table(G3.psi, file="output/directionality_index_output/rangeExp.G3.psi.txt", col.names = F, row.names= F, quote = F)
+
+
+G3.results <- run.regions(psi=G3.psi, region=G3.region, pop=G3.pop, xlen=10, ylen=20) 
+
+G3.P1.sum <- summary.origin.results(G3.results$tbl[[1]])
+G3.P2.sum <- summary.origin.results(G3.results$tbl[[2]])
+
+
+# plot psi matrix as heatmap
+G3.psi2 <- G3.psi
+colnames(G3.psi2) <- G3.pop$coords$pop
+rownames(G3.psi2) <- G3.pop$coords$pop
+
+G3.psi.melt <- melt(G3.psi2)
+
+G3.psi.melt <- G3.psi.melt %>% mutate(Var1 = fct_relevel(Var1, "EastGC10","EastGC11", "EastGC9", "EastGC1", "EastGC7", "EastGC13", "EastGC2", "EastGC3", "EastGC4")) %>% mutate(Var2 = fct_relevel(Var2, "EastGC10","EastGC11", "EastGC9", "EastGC1", "EastGC7", "EastGC13", "EastGC2", "EastGC3", "EastGC4"))
+
+
+G3.psi.melt <- G3.psi.melt %>% mutate(across(c(value), round, 3))
+
+
+G3.psi.col.order <- c( "EastGC10","EastGC11", "EastGC1", "EastGC7", "EastGC13", "EastGC2", "EastGC3", "EastGC4")
+
+G3.psi2.o <- G3.psi2[ , G3.psi.col.order]
+G3.psi2.o <- G3.psi2.o[G3.psi.col.order , ]
+
+ 
+G3.psi.lTri <- get_lower_tri(G3.psi2.o)
+G3.psi.lTri.melt <- melt(G3.psi.lTri, na.rm=TRUE)
+G3.psi.lTri.melt <- G3.psi.lTri.melt %>% mutate(across(c(value), round, 3))
+
+G3.psi.heat2 <- ggplot(data = G3.psi.lTri.melt, aes(x=Var1, y=Var2, fill=value)) + 
+  geom_tile(color="gray") +
+  #geom_text(aes(label = value), color="black", size = 3) +
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+   midpoint = 0, limit = c(-1,1), name=expression(psi)) +
+  #theme_minimal() +
+  theme_classic() +
+  theme(text = element_text(size = 22), axis.text.x = element_text(angle = 90), axis.title.x = element_blank(), axis.title.y = element_blank())
+
+```
+
+&nbsp;
+
+### Calculate Z scores -- Group3
+```{r}
+# Calc a Z score and add to matrix
+G3.psi.lTri.melt$zScore <- (G3.psi.lTri.melt$value - mean(G3.psi.lTri.melt$value))/sd(G3.psi.lTri.melt$value)
+#range(G3.psi.lTri.melt$zScore) # -2.153128  1.862311
+
+write.table(G3.psi.lTri.melt, file="output/directionality_index_output/rangeExp.psi_zscores_grp3.txt", col.names = T, row.names= F, quote = F)
+
+G3.psi.lTri.melt <- G3.psi.lTri.melt %>% mutate(across(c(zScore), round, 3))
+G3.zScore.mat <- xtabs(zScore ~ Var1 + Var2, data=G3.psi.lTri.melt)
+
+G3.zScore.mat
+```
+
+&nbsp;
+
+## Plot all heatmaps together
+Figure S5
+```{r Figure S5}
+psi.plotyy <- ggarrange(G1.psi.heat2 + theme(legend.position = "none"), G2.psi.heat2 + theme(legend.position = "none"), G3.psi.heat2 + theme(legend.position = "none"), ncol=3, labels = c("B", "C", "D"))
+psi.plotxx3 <- ggarrange(all.psi.plot, psi.plotyy, ncol = 1, labels = "A")
+
+
+ggsave(psi.plotxx3, filename = "figures/figureS5_directionality_index.png", width = 14, height = 12, units = "in", dpi = 300)
+
+psi.plotxx3
+```

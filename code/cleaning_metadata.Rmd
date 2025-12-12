@@ -1,0 +1,74 @@
+---
+title: "Clean RSC metadata"
+author: "Nicole Adams"
+date: "2025-07-15"
+output: html_document
+---
+
+Get metadata for samples in VCF for the RSC gene flow analyses
+
+```{r setup, include=FALSE, echo=TRUE}
+# Load necessary packages
+library(tidyverse)
+
+# Define Rmd knit options
+knitr::opts_knit$set(root.dir = "..")
+knitr::opts_chunk$set(
+	fig.height = 6,
+	fig.width = 8,
+	warning = FALSE, # suppress warnings
+	message = FALSE # suppress messages
+)
+#echo = FALSE # defaults to not showing R code, change chunk to echo=TRUE where wanted
+
+# Set eval=FALSE for all bash chunks
+knitr::opts_hooks$set(
+  engine = function(options) {
+    if (options$engine == "bash") {
+      options$eval <- FALSE
+    }
+    options
+  }
+)
+```
+
+# Get list of samples in VCF
+```{bash}
+cd /mnt/home/adamsn23/RedSwampCrayfish/jaredYseq2022yLOA/OUT/genotyped
+
+module load GNU/6.4.0-2.28  OpenMPI/2.1.2 bcftools
+
+bcftools query -l jy22yLoA_adults.recode.vcf > jy22yLoA_adults_samples.txt
+
+```
+
+# Load in VCF samples and clean
+```{r}
+# Samples in VCF (N=1278)
+vcf <- read.delim("~/Documents/crayfish_lab/popGenYabc/jy22yLoA_adults_samples.txt", header = F)
+vcf <- vcf %>% mutate(Sample.Name=V1) %>% separate(V1, into = c("old.pop", "id_number", "id_year")) %>% dplyr::select(Sample.Name, old.pop, id_number, id_year)
+
+
+# Fix names
+vcf$Sample.Name <- gsub("FC17B-M7-22", "FC17b-M7-22", vcf$Sample.Name)
+vcf$Sample.Name <- gsub("FC9B-01-22", "FC9b-01-22", vcf$Sample.Name)
+vcf$Sample.Name <- gsub("FC815-212", "FC8-15-212",  vcf$Sample.Name)
+
+```
+
+# Load in Metadata from NCBI SRA
+```{r}
+### Create metadata file
+full.meta <- read.csv("~/Documents/crayfish_lab/RSC_NCBI_SRA/SRArunTable.csv")
+
+```
+
+# Combine VCF and Metadata and save
+```{r}
+full.meta.vcf <- left_join(vcf, full.meta)
+
+meta4save <- full.meta.vcf %>% select(-c("Assay.Type", "AvgSpotLen", "Bases", "BIOMATERIAL_PROVIDER", "BioSampleModel", "Bytes", "Consent", "DATASTORE.filetype", "DATASTORE.provider", "DATASTORE.region", "ReleaseDate", "create_date", "version"))
+
+#write.csv(meta4save, "~/Documents/crayfish_lab/RedSwampCrayfish_geneFlow/data/metadata_N1278.csv", quote = F, row.names = F)
+```
+
