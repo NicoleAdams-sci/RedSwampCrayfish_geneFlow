@@ -80,6 +80,7 @@ ABC workflow to infer demographic history using 100,000 simulations per model ac
   - Cross-validation for model selection
   - Parameter estimation for best-fit models
   - Cross-validation for parameter estimation
+- For detailed ABC workflow, see `code/ABC/ABC_Workflow_Summary.md`
 
 
 ### 5. Directionality Analysis
@@ -110,9 +111,12 @@ Individual sequences after demultiplexing libraries are available on the NCBI se
 
 Processed data in this repository:
 
-- Filtered VCF files (`data/`)
 - Summary statistics (`output/`)
 - Analysis results (`output/`, `tables/`)
+
+Large data files (i.e. VCF, R data (.rda)) are not included in this repository due to size.
+
+- To reproduce analyses: Place VCF file in `data/` directory
 
 ### Sensitive Data
 
