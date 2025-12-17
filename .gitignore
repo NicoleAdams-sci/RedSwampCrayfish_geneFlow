@@ -4,11 +4,21 @@ sensitive/
 # Ignore old/deprecated code
 **/code_graveyard/
 
+# Ignore large files (keep locally but don't track in git)
+*.vcf
+*.vcf.gz
+**/*.vcf
+data/ABC/jy22yLoA_adults_baseFilter_imiss99_dp5miss50_imiss75_hz.ab_1pRt_100kb_rmdups_orderedMissMat.txt
+output/ABC_output/rsc_100k_params4PEplots_new.csv
+output/ABC_output/rsc_PE_subset_new_*_neuralnet-0.1.rda
+output/ABC_output/rsc_RF_forest_100ksubset.rda
+
 # Operating system files
 .DS_Store  
 
 # README htmls
 README.html
+code/ABC/ABC_Workflow_Summary.html
 
 # Ignore R session info
 .Rhistory
